@@ -25,7 +25,7 @@ class AppBackgroundService {
     const initSettings = InitializationSettings(android: androidInitSettings);
 
     await _localNotifications.initialize(
-      initSettings,
+      settings: initSettings,
       onDidReceiveNotificationResponse: (details) {
         // Handle tapping notification
       },
@@ -126,10 +126,10 @@ class AppBackgroundService {
     );
     const details = NotificationDetails(android: androidDetails);
     await _localNotifications.show(
-      DateTime.now().millisecondsSinceEpoch % 100000,
-      title,
-      body,
-      details,
+      id: DateTime.now().millisecondsSinceEpoch % 100000,
+      title: title,
+      body: body,
+      notificationDetails: details,
       payload: payload,
     );
   }
@@ -148,7 +148,7 @@ void onStart(ServiceInstance service) async {
   const androidInitSettings =
       AndroidInitializationSettings('@mipmap/ic_launcher');
   const initSettings = InitializationSettings(android: androidInitSettings);
-  await localNotifications.initialize(initSettings);
+  await localNotifications.initialize(settings: initSettings);
 
   // Initialize Supabase in background isolate
   try {
