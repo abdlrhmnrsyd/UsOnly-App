@@ -1,0 +1,221 @@
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --color-charcoal-950: #0a0810;
+  --color-charcoal-900: #120f1a;
+  --color-charcoal-850: #171422;
+  --color-charcoal-800: #211c2e;
+  --color-charcoal-750: #282238;
+  --color-charcoal-700: #2f2742;
+  --color-charcoal-600: #463a62;
+  --color-charcoal-500: #64548a;
+
+  --color-plum-950: #13081c;
+  --color-plum-900: #1e0c2c;
+  --color-plum-800: #2e1442;
+  --color-plum-700: #421d5d;
+  --color-plum-600: #5c2882;
+  --color-plum-500: #7c38ad;
+  --color-plum-400: #9e59d4;
+
+  --color-romantic-50: #fff1f3;
+  --color-romantic-100: #ffe4e7;
+  --color-romantic-200: #fecdd5;
+  --color-romantic-300: #fda4b5;
+  --color-romantic-400: #fb718c;
+  --color-romantic-500: #f43f66;
+  --color-romantic-600: #e11d4a;
+  --color-romantic-700: #be1238;
+
+  --font-sans: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+
+  --animate-pulse-subtle: pulseSubtle 2.5s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  --animate-heartbeat: heartbeat 1.5s ease-in-out infinite;
+  --animate-fade-in: fadeIn 0.25s ease-out forwards;
+  --animate-slide-up: slideUp 0.3s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+  --animate-float: float 4s ease-in-out infinite;
+  --animate-float-slow: float 7s ease-in-out infinite;
+  --animate-shimmer: shimmer 2.5s linear infinite;
+
+  @keyframes pulseSubtle {
+    0%, 100% { opacity: 1; }
+    50% { opacity: 0.6; }
+  }
+  @keyframes heartbeat {
+    0%, 100% { transform: scale(1); }
+    14% { transform: scale(1.15); }
+    28% { transform: scale(1); }
+    42% { transform: scale(1.15); }
+    70% { transform: scale(1); }
+  }
+  @keyframes fadeIn {
+    from { opacity: 0; transform: translateY(4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes slideUp {
+    from { opacity: 0; transform: translateY(16px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  @keyframes float {
+    0%, 100% { transform: translateY(0px); }
+    50% { transform: translateY(-8px); }
+  }
+  @keyframes shimmer {
+    0% { background-position: -200% 0; }
+    100% { background-position: 200% 0; }
+  }
+}
+
+@layer base {
+  :root {
+    --safe-bottom: env(safe-area-inset-bottom, 0px);
+    --safe-top: env(safe-area-inset-top, 0px);
+  }
+
+  body {
+    font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    overflow-x: hidden;
+  }
+}
+
+/* Custom romantic smooth scrollbar */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+::-webkit-scrollbar-thumb {
+  background: rgba(124, 56, 173, 0.25);
+  border-radius: 9999px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: rgba(244, 63, 102, 0.45);
+}
+
+/* Leaflet Map Customizations in Dark Mode */
+.dark .leaflet-tile-pane {
+  filter: brightness(0.8) invert(1) contrast(3) hue-rotate(200deg) saturate(0.35);
+}
+
+.leaflet-container {
+  font-family: inherit;
+  background-color: #120f1a !important;
+  z-index: 10;
+}
+
+.leaflet-popup-content-wrapper {
+  background: #181422 !important;
+  color: #f3f0f7 !important;
+  border: 1px solid rgba(124, 56, 173, 0.3) !important;
+  border-radius: 14px !important;
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.5) !important;
+}
+
+.leaflet-popup-tip {
+  background: #181422 !important;
+}
+
+/* Glassmorphism helpers with luxury rim lighting */
+.glass-panel {
+  background: rgba(20, 16, 29, 0.82);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(255, 255, 255, 0.08);
+  box-shadow: 0 8px 32px 0 rgba(0, 0, 0, 0.37);
+}
+
+.glass-card {
+  background: rgba(24, 19, 34, 0.68);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.07);
+  box-shadow: 0 8px 24px -4px rgba(0, 0, 0, 0.4);
+}
+
+.glass-card-glow {
+  background: radial-gradient(120% 120% at 50% 0%, rgba(124, 56, 173, 0.12) 0%, rgba(20, 16, 29, 0.75) 100%);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(244, 63, 102, 0.2);
+  box-shadow: 0 12px 36px -6px rgba(124, 56, 173, 0.2), 0 0 0 1px rgba(255, 255, 255, 0.05);
+}
+
+/* Romantic Ambient Lights */
+.ambient-glow-pink {
+  background: radial-gradient(circle, rgba(244, 63, 102, 0.18) 0%, rgba(244, 63, 102, 0) 70%);
+}
+
+.ambient-glow-plum {
+  background: radial-gradient(circle, rgba(124, 56, 173, 0.18) 0%, rgba(124, 56, 173, 0) 70%);
+}
+
+/* Romantic Monogram and Certificate Styling */
+.gold-foil-text {
+  background: linear-gradient(135deg, #fff7d6 0%, #f7d070 35%, #e6a73c 70%, #fff0b3 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.rose-foil-text {
+  background: linear-gradient(135deg, #ffe4e7 0%, #fb718c 40%, #f43f66 75%, #fda4b5 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+/* Chat Wallpaper subtle romantic pattern */
+.chat-pattern-bg {
+  background-color: #0f0c18;
+  background-image: radial-gradient(rgba(244, 63, 102, 0.08) 1px, transparent 1px), radial-gradient(rgba(124, 56, 173, 0.08) 1px, #0f0c18 1px);
+  background-size: 28px 28px;
+  background-position: 0 0, 14px 14px;
+}
+
+/* Polaroid Scrapbook Aesthetic */
+.polaroid-card {
+  background: #fdfcfb;
+  color: #1f1b24;
+  box-shadow: 0 12px 30px -6px rgba(0, 0, 0, 0.6), 0 2px 6px rgba(0, 0, 0, 0.2);
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.3s ease;
+}
+
+.polaroid-card:hover {
+  transform: translateY(-6px) rotate(1deg) scale(1.02);
+  box-shadow: 0 20px 40px -10px rgba(244, 63, 102, 0.3), 0 4px 12px rgba(0, 0, 0, 0.3);
+}
+
+.washi-tape {
+  position: absolute;
+  top: -12px;
+  left: 50%;
+  transform: translateX(-50%) rotate(-1deg);
+  width: 70px;
+  height: 22px;
+  background: rgba(254, 205, 213, 0.7);
+  box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+  border-left: 2px dashed rgba(225, 29, 74, 0.3);
+  border-right: 2px dashed rgba(225, 29, 74, 0.3);
+  z-index: 20;
+}
+
+/* Heart Floating Sparkle animation */
+@keyframes floatUpFade {
+  0% {
+    transform: translateY(0) scale(0.8);
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-80px) scale(1.4);
+    opacity: 0;
+  }
+}
+
+.animate-float-heart {
+  animation: floatUpFade 1.4s ease-out forwards;
+}
