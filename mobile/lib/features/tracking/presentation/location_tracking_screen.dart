@@ -5,6 +5,7 @@ import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart' hide Path;
 import 'package:url_launcher/url_launcher.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../core/battery_service.dart';
 import '../../auth/domain/auth_state.dart';
 import '../../chat/data/chat_repository.dart';
 import '../../media/presentation/app_image_view.dart';
@@ -37,6 +38,7 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
   bool _isPanelExpanded = true;
   String _selectedStatus = 'Di Rumah 🏡';
   LatLng? _lastAutoCenteredPoint;
+  int _myBatteryLevel = 100;
 
   final List<String> _statusOptions = [
     'Di Rumah 🏡',
@@ -50,6 +52,7 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
   @override
   void initState() {
     super.initState();
+    _loadBattery();
     _pulseController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 1800),
@@ -62,6 +65,13 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _initUserLocation();
     });
+  }
+
+  Future<void> _loadBattery() async {
+    try {
+      final level = await BatteryService.getBatteryLevel();
+      if (mounted) setState(() => _myBatteryLevel = level);
+    } catch (_) {}
   }
 
   @override
@@ -262,7 +272,7 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
 
           final partnerDisplayName = partnerLoc?.displayName ?? 'Pasangan Kamu';
           final partnerPhotoUrl = partnerLoc?.photoUrl;
-          final partnerBattery = partnerLoc?.batteryLevel ?? 88;
+          final partnerBattery = partnerLoc?.batteryLevel ?? 100;
           final partnerPlace = partnerLoc?.placeLabel ?? 'Di Rumah 🏡';
 
           final distanceMeters = const Distance().as(LengthUnit.Meter, myLatLng, partnerLatLng);
@@ -396,7 +406,7 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
                               photoUrl: user.photoUrl,
                               isMe: true,
                               isLive: isMyLiveActive,
-                              batteryLevel: 88,
+                              batteryLevel: _myBatteryLevel,
                               pulseValue: _pulseAnimation.value,
                             ),
                           ),

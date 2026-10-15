@@ -7,6 +7,7 @@ import 'package:geolocator/geolocator.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../app/config/supabase_config.dart';
+import 'battery_service.dart';
 
 const String foregroundChannelId = 'usonly_foreground';
 const String alertChannelId = 'usonly_alerts';
@@ -274,13 +275,18 @@ void onStart(ServiceInstance service) async {
         'updated_at': DateTime.now().toIso8601String(),
       });
 
-      // 3. Ensure location_sharing is enabled
+      // 3. Ensure location_sharing is enabled & sync battery
       await supabase.from('location_sharing').upsert({
         'couple_id': currentSpaceId,
         'user_id': currentUserId,
         'enabled': true,
         'updated_at': DateTime.now().toIso8601String(),
       });
+
+      final batteryLevel = await BatteryService.getBatteryLevel();
+      await supabase.from('profiles').update({
+        'battery_level': batteryLevel,
+      }).eq('id', currentUserId);
 
       // 4. Update notification status
       if (service is AndroidServiceInstance) {

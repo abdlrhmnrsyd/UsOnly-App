@@ -5,6 +5,8 @@ import '../../auth/domain/auth_state.dart';
 import '../../media/data/storage_repository.dart';
 import '../../media/presentation/app_image_view.dart';
 import '../../media/presentation/in_app_media_picker.dart';
+import '../../updater/data/app_update_service.dart';
+import '../../updater/presentation/update_dialog.dart';
 
 class ProfileScreen extends ConsumerWidget {
   const ProfileScreen({super.key});
@@ -83,6 +85,33 @@ class ProfileScreen extends ConsumerWidget {
     );
   }
 
+  Future<void> _checkForUpdate(BuildContext context) async {
+    ScaffoldMessenger.of(context).showSnackBar(
+      const SnackBar(content: Text('Memeriksa pembaruan aplikasi...')),
+    );
+    try {
+      final update = await AppUpdateService.checkForUpdate();
+      if (context.mounted) {
+        if (update != null) {
+          UpdateDialog.show(context, update);
+        } else {
+          ScaffoldMessenger.of(context).showSnackBar(
+            const SnackBar(
+              content: Text('Aplikasi kamu sudah versi terbaru! ✨'),
+              backgroundColor: AppColors.primary,
+            ),
+          );
+        }
+      }
+    } catch (e) {
+      if (context.mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal memeriksa pembaruan: $e')),
+        );
+      }
+    }
+  }
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final user = ref.watch(authStateProvider).user;
@@ -159,10 +188,12 @@ class ProfileScreen extends ConsumerWidget {
                   onTap: () {},
                 ),
                 const Divider(height: 1),
-                const ListTile(
-                  leading: Icon(Icons.info_outline_rounded, color: AppColors.primary),
-                  title: Text('App Version'),
-                  trailing: Text('2.0.0 (Node.js REST API + WebSocket)'),
+                ListTile(
+                  leading: const Icon(Icons.system_update_rounded, color: AppColors.primary),
+                  title: const Text('Pembaruan Aplikasi'),
+                  subtitle: const Text('Periksa dan update versi terbaru'),
+                  trailing: const Icon(Icons.chevron_right_rounded),
+                  onTap: () => _checkForUpdate(context),
                 ),
               ],
             ),

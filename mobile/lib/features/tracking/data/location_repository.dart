@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/background_service.dart';
+import '../../../core/battery_service.dart';
 import '../../../core/socket_service.dart';
 import '../domain/location_model.dart';
 
@@ -70,7 +71,7 @@ class LocationRepository {
 
       final rows = await _supabase
           .from('locations')
-          .select('*, profiles(display_name, nickname, avatar_url)')
+          .select('*, profiles(display_name, nickname, avatar_url, battery_level)')
           .eq('couple_id', actualSpaceId);
 
       for (final r in rows) {
@@ -79,6 +80,7 @@ class LocationRepository {
           final profileData = r['profiles'] as Map<String, dynamic>?;
           final name = profileData?['nickname'] ?? profileData?['display_name'] ?? 'Partner';
           final avatar = profileData?['avatar_url'];
+          final battery = (profileData?['battery_level'] as num?)?.toInt() ?? 100;
 
           final loc = LocationModel(
             uid: uid,
@@ -87,7 +89,7 @@ class LocationRepository {
             latitude: (r['latitude'] as num).toDouble(),
             longitude: (r['longitude'] as num).toDouble(),
             placeLabel: r['address_label']?.toString() ?? r['status_note']?.toString() ?? 'Di Lokasi 📍',
-            batteryLevel: 88,
+            batteryLevel: battery,
             isLive: true,
             updatedAt: r['updated_at'] != null
                 ? DateTime.tryParse(r['updated_at'].toString()) ?? DateTime.now()
@@ -300,6 +302,8 @@ class LocationRepository {
       }
     }
 
+    final realBattery = await BatteryService.getBatteryLevel();
+
     final model = LocationModel(
       uid: uid,
       displayName: displayName,
@@ -307,7 +311,7 @@ class LocationRepository {
       latitude: lat,
       longitude: lng,
       placeLabel: placeLabel ?? 'Di Rumah 🏡',
-      batteryLevel: 88,
+      batteryLevel: realBattery,
       isLive: isLive,
       updatedAt: DateTime.now(),
     );
@@ -326,6 +330,10 @@ class LocationRepository {
         'address_label': placeLabel ?? 'Di Rumah 🏡',
         'updated_at': DateTime.now().toIso8601String(),
       });
+
+      await _supabase.from('profiles').update({
+        'battery_level': realBattery,
+      }).eq('id', uid);
     } catch (e) {
       debugPrint('Supabase upsert location notice: $e');
     }

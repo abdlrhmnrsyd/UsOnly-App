@@ -4,6 +4,7 @@ import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/app_colors.dart';
+import '../../../core/battery_service.dart';
 import '../../auth/domain/auth_state.dart';
 import '../../media/data/storage_repository.dart';
 import '../../media/presentation/in_app_media_picker.dart';

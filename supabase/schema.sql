@@ -560,6 +560,26 @@ GRANT EXECUTE ON FUNCTION public.create_pairing_code() TO authenticated;
 GRANT EXECUTE ON FUNCTION public.join_couple_space(text) TO authenticated;
 
 -- ====================================================================
+-- IN-APP UPDATE SYSTEM
+-- ====================================================================
+CREATE TABLE IF NOT EXISTS public.app_versions (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  version_code INT NOT NULL UNIQUE,
+  version_name TEXT NOT NULL,
+  apk_url TEXT NOT NULL,
+  changelog TEXT DEFAULT 'Pembaruan aplikasi terbaru.',
+  is_mandatory BOOLEAN DEFAULT false,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+
+ALTER TABLE public.app_versions ENABLE ROW LEVEL SECURITY;
+
+DROP POLICY IF EXISTS "Allow anyone to read app versions" ON public.app_versions;
+CREATE POLICY "Allow anyone to read app versions"
+  ON public.app_versions FOR SELECT
+  USING (true);
+
+-- ====================================================================
 -- SUPABASE STORAGE BUCKET INSTRUCTIONS
 -- ====================================================================
 -- Bucket Name: 'our-space-media' (public: false)
