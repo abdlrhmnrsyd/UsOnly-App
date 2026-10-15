@@ -155,7 +155,7 @@ void onStart(ServiceInstance service) async {
   try {
     await Supabase.initialize(
       url: SupabaseConfig.url,
-      anonKey: SupabaseConfig.anonKey,
+      publishableKey: SupabaseConfig.publishableKey,
     );
   } catch (_) {
     // Already initialized or fallback

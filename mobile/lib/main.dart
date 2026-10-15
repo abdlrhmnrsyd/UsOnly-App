@@ -13,7 +13,7 @@ Future<void> main() async {
   // Initialize Supabase Native
   await Supabase.initialize(
     url: SupabaseConfig.url,
-    anonKey: SupabaseConfig.anonKey,
+    publishableKey: SupabaseConfig.publishableKey,
   );
 
   // Initialize Background Service & Notifications

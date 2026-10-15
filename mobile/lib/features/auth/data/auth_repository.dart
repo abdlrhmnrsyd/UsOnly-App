@@ -1,4 +1,5 @@
 import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/battery_service.dart';
 import '../domain/user_model.dart';
 
 class AuthRepository {
@@ -34,6 +35,7 @@ class AuthRepository {
     // Upsert into public.profiles
     final defaultAvatar =
         'https://api.dicebear.com/7.x/adventurer/svg?seed=${Uri.encodeComponent(displayName.trim())}';
+    final realBattery = await BatteryService.getBatteryLevel();
     final profileData = {
       'id': user.id,
       'email': cleanEmail,
@@ -43,7 +45,7 @@ class AuthRepository {
       'bio': 'Ruang cinta kita berdua ❤️',
       'theme_preference': 'dark',
       'status_text': 'Online',
-      'battery_level': 100,
+      'battery_level': realBattery,
       'updated_at': DateTime.now().toIso8601String(),
     };
 
@@ -83,6 +85,7 @@ class AuthRepository {
     // Self-heal: create profile if missing
     final defaultAvatar =
         'https://api.dicebear.com/7.x/adventurer/svg?seed=${Uri.encodeComponent(cleanEmail)}';
+    final loginBattery = await BatteryService.getBatteryLevel();
     final newProfile = {
       'id': user.id,
       'email': cleanEmail,
@@ -92,7 +95,7 @@ class AuthRepository {
       'bio': 'Ruang cinta kita berdua ❤️',
       'theme_preference': 'dark',
       'status_text': 'Online',
-      'battery_level': 100,
+      'battery_level': loginBattery,
       'updated_at': DateTime.now().toIso8601String(),
     };
 
@@ -124,6 +127,7 @@ class AuthRepository {
       // Self-heal: create missing profile automatically!
       final defaultAvatar =
           'https://api.dicebear.com/7.x/adventurer/svg?seed=${Uri.encodeComponent(user.email ?? 'User')}';
+      final getMeBattery = await BatteryService.getBatteryLevel();
       final newProfile = {
         'id': user.id,
         'email': user.email ?? '',
@@ -133,7 +137,7 @@ class AuthRepository {
         'bio': 'Ruang cinta kita berdua ❤️',
         'theme_preference': 'dark',
         'status_text': 'Online',
-        'battery_level': 100,
+        'battery_level': getMeBattery,
         'updated_at': DateTime.now().toIso8601String(),
       };
       try {

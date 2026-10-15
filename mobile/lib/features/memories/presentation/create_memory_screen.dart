@@ -107,7 +107,7 @@ class _CreateMemoryScreenState extends ConsumerState<CreateMemoryScreen> {
             locationName: _locationController.text.trim().isEmpty ? null : _locationController.text.trim(),
             latitude: _lat,
             longitude: _lng,
-            batteryLevel: 88,
+            batteryLevel: await BatteryService.getBatteryLevel(),
           );
 
       if (mounted) {
