@@ -1,51 +1,67 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import '../../../core/api_client.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/socket_service.dart';
+import '../../media/data/storage_repository.dart';
 import '../domain/message_model.dart';
 
 final chatRepositoryProvider = Provider<ChatRepository>((ref) {
-  final client = ref.watch(apiClientProvider);
   final socket = ref.watch(socketServiceProvider);
-  return ChatRepository(client, socket);
+  final storage = ref.watch(storageRepositoryProvider);
+  return ChatRepository(socket, storage);
 });
 
 class ChatRepository {
-  final ApiClient _client;
   final SocketService _socket;
+  final StorageRepository _storage;
+  SupabaseClient get _supabase => Supabase.instance.client;
+
   final StreamController<List<MessageModel>> _messagesStreamController =
       StreamController<List<MessageModel>>.broadcast();
   final List<MessageModel> _inMemoryMessages = [];
   Timer? _pollingTimer;
 
-  ChatRepository(this._client, this._socket) {
+  ChatRepository(this._socket, this._storage) {
     _socket.onMessage.listen((json) {
       final msg = MessageModel.fromJson(json);
-      _inMemoryMessages.insert(0, msg);
-      _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+      // Append to the bottom (newest message)
+      if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
+        _inMemoryMessages.add(msg);
+        _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+      }
     });
   }
 
   Stream<List<MessageModel>> watchMessages(String conversationId, {int limit = 50}) {
-    fetchMessages();
+    fetchMessages(spaceId: conversationId, limit: limit);
     _pollingTimer?.cancel();
-    _pollingTimer = Timer.periodic(const Duration(seconds: 10), (_) => fetchMessages());
+    _pollingTimer = Timer.periodic(
+      const Duration(seconds: 10),
+      (_) => fetchMessages(spaceId: conversationId, limit: limit),
+    );
     return _messagesStreamController.stream;
   }
 
-  Future<List<MessageModel>> fetchMessages() async {
+  Future<List<MessageModel>> fetchMessages({String? spaceId, int limit = 50}) async {
     try {
-      final res = await _client.get('/messages');
-      if (res['messages'] is List) {
-        final list = (res['messages'] as List)
-            .map((item) => MessageModel.fromJson(Map<String, dynamic>.from(item)))
-            .toList();
-        _inMemoryMessages.clear();
-        _inMemoryMessages.addAll(list);
-        _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
-        return list;
+      final user = _supabase.auth.currentUser;
+      if (user == null) return _inMemoryMessages;
+
+      var query = _supabase.from('messages').select('*');
+      if (spaceId != null && spaceId.isNotEmpty) {
+        query = query.eq('couple_id', spaceId);
       }
+      // Order chronologically (ascending: true) so oldest is at top, newest at bottom!
+      final res = await query.order('created_at', ascending: true).limit(limit);
+
+      final list = res
+          .map((item) => MessageModel.fromJson(Map<String, dynamic>.from(item)))
+          .toList();
+      _inMemoryMessages.clear();
+      _inMemoryMessages.addAll(list);
+      _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+      return list;
     } catch (_) {}
     return _inMemoryMessages;
   }
@@ -55,14 +71,39 @@ class ChatRepository {
   }
 
   Future<MessageModel> sendTextMessage(String text) async {
-    final res = await _client.post('/messages', {
-      'content': text.trim(),
-      'message_type': 'text',
-    });
+    final user = _supabase.auth.currentUser;
+    if (user == null) throw Exception('Belum login');
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(res['message'] ?? res));
+    final profile = await _supabase
+        .from('profiles')
+        .select('space_id')
+        .eq('id', user.id)
+        .maybeSingle();
+
+    final spaceId = profile?['space_id']?.toString();
+    if (spaceId == null || spaceId.isEmpty) {
+      throw Exception('Belum terhubung dengan ruang pasangan.');
+    }
+
+    final newRow = {
+      'couple_id': spaceId,
+      'sender_id': user.id,
+      'message_type': 'text',
+      'content': text.trim(),
+      'created_at': DateTime.now().toIso8601String(),
+    };
+
+    final inserted = await _supabase
+        .from('messages')
+        .insert(newRow)
+        .select()
+        .single();
+
+    final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    _inMemoryMessages.insert(0, msg);
+    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
+      _inMemoryMessages.add(msg);
+    }
     _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
     return msg;
   }
@@ -76,15 +117,28 @@ class ChatRepository {
     String type = 'text',
     String? mediaUrl,
   }) async {
-    final res = await _client.post('/messages', {
+    final dbType = (type == 'pap' || type == 'image') ? 'image' : type;
+
+    final newRow = {
+      'couple_id': conversationId,
+      'sender_id': senderUid,
+      'message_type': dbType,
       'content': content,
       'media_url': mediaUrl,
-      'message_type': type,
-    });
+      'created_at': DateTime.now().toIso8601String(),
+    };
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(res['message'] ?? res));
+    final inserted = await _supabase
+        .from('messages')
+        .insert(newRow)
+        .select()
+        .single();
+
+    final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    _inMemoryMessages.insert(0, msg);
+    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
+      _inMemoryMessages.add(msg);
+    }
     _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
     return msg;
   }
@@ -99,7 +153,7 @@ class ChatRepository {
       conversationId: conversationId,
       senderUid: senderUid,
       content: caption ?? '📸 PAP Kilat',
-      type: 'pap',
+      type: 'image',
       mediaUrl: mediaUrl,
     );
   }
@@ -109,19 +163,29 @@ class ChatRepository {
     String? caption,
     required String type,
   }) async {
-    final fileUrl = await _client.uploadPhoto(file);
+    final user = _supabase.auth.currentUser;
+    if (user == null) throw Exception('Belum login');
 
-    final res = await _client.post('/messages', {
-      'content': caption ?? (type == 'pap' ? '📸 PAP Kilat' : 'Foto dikirim'),
-      'media_url': fileUrl,
-      'message_type': type,
-    });
+    final profile = await _supabase
+        .from('profiles')
+        .select('space_id')
+        .eq('id', user.id)
+        .maybeSingle();
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(res['message'] ?? res));
-    _socket.emitNewMessage(msg.toJson());
-    _inMemoryMessages.insert(0, msg);
-    _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
-    return msg;
+    final spaceId = profile?['space_id']?.toString();
+    if (spaceId == null || spaceId.isEmpty) {
+      throw Exception('Belum terhubung dengan ruang pasangan.');
+    }
+
+    final fileUrl = await _storage.uploadPhoto(file);
+
+    return await sendMessage(
+      conversationId: spaceId,
+      senderUid: user.id,
+      content: caption ?? (type == 'pap' ? '📸 PAP Kilat' : 'Foto dikirim'),
+      type: type == 'pap' ? 'image' : type,
+      mediaUrl: fileUrl,
+    );
   }
 
   Future<MessageModel> sendLocationMessage({
@@ -131,15 +195,43 @@ class ChatRepository {
     String? conversationId,
     String? senderUid,
   }) async {
-    final res = await _client.post('/messages', {
-      'content': '📍 $placeLabel',
-      'media_url': null,
-      'message_type': 'location',
-    });
+    final user = _supabase.auth.currentUser;
+    final uid = senderUid ?? user?.id;
+    if (uid == null) throw Exception('Belum login');
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(res['message'] ?? res));
+    String? spaceId = conversationId;
+    if (spaceId == null || spaceId.isEmpty) {
+      final profile = await _supabase
+          .from('profiles')
+          .select('space_id')
+          .eq('id', uid)
+          .maybeSingle();
+      spaceId = profile?['space_id']?.toString();
+    }
+
+    if (spaceId == null || spaceId.isEmpty) {
+      throw Exception('Belum terhubung dengan ruang pasangan.');
+    }
+
+    final newRow = {
+      'couple_id': spaceId,
+      'sender_id': uid,
+      'message_type': 'location',
+      'content': '📍 $placeLabel',
+      'created_at': DateTime.now().toIso8601String(),
+    };
+
+    final inserted = await _supabase
+        .from('messages')
+        .insert(newRow)
+        .select()
+        .single();
+
+    final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    _inMemoryMessages.insert(0, msg);
+    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
+      _inMemoryMessages.add(msg);
+    }
     _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
     return msg;
   }
@@ -149,6 +241,25 @@ class ChatRepository {
     required String senderNickname,
     String? customNote,
   }) async {
+    final user = _supabase.auth.currentUser;
+    if (user != null) {
+      final profile = await _supabase
+          .from('profiles')
+          .select('space_id')
+          .eq('id', user.id)
+          .maybeSingle();
+      final spaceId = profile?['space_id']?.toString();
+      if (spaceId != null) {
+        await _supabase.from('messages').insert({
+          'couple_id': spaceId,
+          'sender_id': user.id,
+          'message_type': 'poke',
+          'content': customNote ?? 'Mengirim Colekan Cinta: $pokeType',
+          'created_at': DateTime.now().toIso8601String(),
+        }).catchError((_) {});
+      }
+    }
+
     _socket.emitLovePoke({
       'pokeType': pokeType,
       'senderNickname': senderNickname,
@@ -161,6 +272,13 @@ class ChatRepository {
   }
 
   void markAsRead() {
-    _client.post('/messages/read').catchError((_) {});
+    final user = _supabase.auth.currentUser;
+    if (user == null) return;
+    _supabase
+        .from('messages')
+        .update({'is_read': true, 'read_at': DateTime.now().toIso8601String()})
+        .neq('sender_id', user.id)
+        .eq('is_read', false)
+        .catchError((_) {});
   }
 }

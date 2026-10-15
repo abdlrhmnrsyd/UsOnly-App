@@ -9,16 +9,17 @@ export default defineConfig({
     port: 5173,
     proxy: {
       '/api': {
-        target: 'http://localhost:5000',
+        target: 'https://usonlyapp-y5vbp4nl.b4a.run',
         changeOrigin: true,
       },
       '/uploads': {
-        target: 'http://localhost:5000',
+        target: 'https://usonlyapp-y5vbp4nl.b4a.run',
         changeOrigin: true,
       },
       '/socket.io': {
-        target: 'http://localhost:5000',
+        target: 'https://usonlyapp-y5vbp4nl.b4a.run',
         ws: true,
+        changeOrigin: true,
       },
     },
   },

@@ -59,6 +59,10 @@ CREATE TABLE IF NOT EXISTS public.couple_members (
 CREATE OR REPLACE FUNCTION public.check_couple_max_two_members()
 RETURNS TRIGGER AS $$
 BEGIN
+  IF EXISTS (SELECT 1 FROM public.couple_members WHERE couple_id = NEW.couple_id AND user_id = NEW.user_id) THEN
+    RETURN NEW;
+  END IF;
+
   IF (SELECT COUNT(*) FROM public.couple_members WHERE couple_id = NEW.couple_id) >= 2 THEN
     RAISE EXCEPTION 'Ruang pasangan sudah lengkap berdua (maksimal 2 anggota). Akses ditolak!';
   END IF;
@@ -142,7 +146,7 @@ CREATE TABLE IF NOT EXISTS public.locations (
 CREATE TABLE IF NOT EXISTS public.location_sharing (
   couple_id UUID NOT NULL REFERENCES public.couple_spaces(id) ON DELETE CASCADE,
   user_id UUID NOT NULL REFERENCES auth.users(id) ON DELETE CASCADE,
-  enabled BOOLEAN NOT NULL DEFAULT false,
+  enabled BOOLEAN NOT NULL DEFAULT true,
   expires_at TIMESTAMPTZ,
   updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   PRIMARY KEY (couple_id, user_id)
@@ -231,14 +235,14 @@ CREATE POLICY "Users can insert own profile"
   ON public.profiles FOR INSERT
   WITH CHECK (id = auth.uid());
 
--- Couple Spaces: Viewable and updatable only by members
-CREATE POLICY "View couple space if member"
+-- Couple Spaces: Viewable and updatable by creator or members
+CREATE POLICY "View couple space if member or creator"
   ON public.couple_spaces FOR SELECT
-  USING (public.is_couple_member(id) OR created_by = auth.uid());
+  USING (created_by = auth.uid() OR public.is_couple_member(id));
 
-CREATE POLICY "Members can update couple space"
+CREATE POLICY "Update couple space if member or creator"
   ON public.couple_spaces FOR UPDATE
-  USING (public.is_couple_member(id));
+  USING (created_by = auth.uid() OR public.is_couple_member(id));
 
 CREATE POLICY "Authenticated users can create space"
   ON public.couple_spaces FOR INSERT
@@ -247,20 +251,45 @@ CREATE POLICY "Authenticated users can create space"
 -- Couple Members
 CREATE POLICY "View members of own couple"
   ON public.couple_members FOR SELECT
-  USING (public.is_couple_member(couple_id));
+  USING (user_id = auth.uid() OR public.is_couple_member(couple_id));
   
-CREATE POLICY "Insert couple member via invitation verification"
+CREATE POLICY "Insert couple member"
   ON public.couple_members FOR INSERT
   WITH CHECK (user_id = auth.uid());
+
+CREATE POLICY "Update couple member"
+  ON public.couple_members FOR UPDATE
+  USING (user_id = auth.uid() OR public.is_couple_member(couple_id))
+  WITH CHECK (user_id = auth.uid() OR public.is_couple_member(couple_id));
+
+CREATE POLICY "Delete couple member"
+  ON public.couple_members FOR DELETE
+  USING (user_id = auth.uid());
 
 -- Invitations: Creator can view, others can lookup active unexpired code
 CREATE POLICY "View invitations if creator or active lookup"
   ON public.invitations FOR SELECT
   USING (created_by = auth.uid() OR (used_at IS NULL AND expires_at > now()));
 
-CREATE POLICY "Insert invitation if creator and member"
+CREATE POLICY "Insert invitation if creator"
   ON public.invitations FOR INSERT
-  WITH CHECK (created_by = auth.uid() AND public.is_couple_member(couple_id));
+  WITH CHECK (created_by = auth.uid());
+
+CREATE POLICY "Update invitation"
+  ON public.invitations FOR UPDATE
+  USING (
+    created_by = auth.uid() OR 
+    (used_at IS NULL AND expires_at > now()) OR
+    used_by = auth.uid()
+  )
+  WITH CHECK (
+    created_by = auth.uid() OR 
+    used_by = auth.uid()
+  );
+
+CREATE POLICY "Delete own invitation"
+  ON public.invitations FOR DELETE
+  USING (created_by = auth.uid());
 
 -- Messages: Strictly isolated to couple space
 CREATE POLICY "View messages in own couple"
@@ -365,6 +394,170 @@ CREATE POLICY "View special dates in own space"
 CREATE POLICY "Manage special dates in own space"
   ON public.special_dates FOR ALL
   USING (public.is_couple_member(space_id));
+
+-- ====================================================================
+-- ATOMIC RPC FUNCTIONS (SECURITY DEFINER - Safe pairing bypassing RLS)
+-- ====================================================================
+
+-- 1. Create or retrieve active pairing code
+CREATE OR REPLACE FUNCTION public.create_pairing_code()
+RETURNS jsonb AS $$
+DECLARE
+  v_user_id uuid;
+  v_space_id uuid;
+  v_code text;
+  v_expires_at timestamptz;
+  v_chars text := 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
+  v_random text := '';
+  i int;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Belum login');
+  END IF;
+
+  -- 1. Get space_id from profiles
+  SELECT space_id INTO v_space_id
+  FROM public.profiles
+  WHERE id = v_user_id;
+
+  -- 2. If no space or space does not exist in couple_spaces, create one
+  IF v_space_id IS NULL OR NOT EXISTS (SELECT 1 FROM public.couple_spaces WHERE id = v_space_id) THEN
+    INSERT INTO public.couple_spaces (created_by, name, status)
+    VALUES (v_user_id, 'Ruang Kita', 'pending')
+    RETURNING id INTO v_space_id;
+
+    INSERT INTO public.couple_members (couple_id, user_id)
+    VALUES (v_space_id, v_user_id)
+    ON CONFLICT (couple_id, user_id) DO NOTHING;
+
+    UPDATE public.profiles
+    SET space_id = v_space_id
+    WHERE id = v_user_id;
+
+    INSERT INTO public.location_sharing (couple_id, user_id, enabled)
+    VALUES (v_space_id, v_user_id, true)
+    ON CONFLICT (couple_id, user_id) DO UPDATE SET enabled = true;
+  ELSE
+    -- Ensure user is recorded in couple_members & location_sharing
+    INSERT INTO public.couple_members (couple_id, user_id)
+    VALUES (v_space_id, v_user_id)
+    ON CONFLICT (couple_id, user_id) DO NOTHING;
+
+    INSERT INTO public.location_sharing (couple_id, user_id, enabled)
+    VALUES (v_space_id, v_user_id, true)
+    ON CONFLICT (couple_id, user_id) DO UPDATE SET enabled = true;
+  END IF;
+
+  -- 3. Return active unexpired invitation if exists
+  SELECT code_hash, expires_at INTO v_code, v_expires_at
+  FROM public.invitations
+  WHERE created_by = v_user_id
+    AND couple_id = v_space_id
+    AND used_at IS NULL
+    AND expires_at > now()
+  ORDER BY created_at DESC
+  LIMIT 1;
+
+  IF v_code IS NOT NULL THEN
+    RETURN jsonb_build_object(
+      'success', true,
+      'code', v_code,
+      'expires_at', v_expires_at,
+      'space_id', v_space_id
+    );
+  END IF;
+
+  -- 4. Generate random 4-character code: KITA-XXXX
+  FOR i IN 1..4 LOOP
+    v_random := v_random || substr(v_chars, floor(random() * length(v_chars) + 1)::int, 1);
+  END LOOP;
+  v_code := 'KITA-' || v_random;
+  v_expires_at := now() + interval '24 hours';
+
+  -- 5. Insert invitation
+  INSERT INTO public.invitations (couple_id, code_hash, created_by, expires_at)
+  VALUES (v_space_id, v_code, v_user_id, v_expires_at);
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'code', v_code,
+    'expires_at', v_expires_at,
+    'space_id', v_space_id
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+-- 2. Join couple space via pairing code
+CREATE OR REPLACE FUNCTION public.join_couple_space(invite_code text)
+RETURNS jsonb AS $$
+DECLARE
+  v_user_id uuid;
+  v_invite record;
+  v_member_count int;
+BEGIN
+  v_user_id := auth.uid();
+  IF v_user_id IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Belum login');
+  END IF;
+
+  invite_code := upper(trim(invite_code));
+
+  SELECT * INTO v_invite
+  FROM public.invitations
+  WHERE upper(trim(code_hash)) = invite_code
+    AND used_at IS NULL
+    AND expires_at > now()
+  ORDER BY created_at DESC
+  LIMIT 1;
+
+  IF v_invite IS NULL THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Kode pairing tidak valid atau sudah kadaluwarsa');
+  END IF;
+
+  IF v_invite.created_by = v_user_id THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Kamu tidak bisa memasukkan kode yang kamu buat sendiri');
+  END IF;
+
+  SELECT count(*) INTO v_member_count
+  FROM public.couple_members
+  WHERE couple_id = v_invite.couple_id;
+
+  IF v_member_count >= 2 THEN
+    RETURN jsonb_build_object('success', false, 'message', 'Ruang pasangan ini sudah penuh (maksimal 2 orang)');
+  END IF;
+
+  INSERT INTO public.couple_members (couple_id, user_id)
+  VALUES (v_invite.couple_id, v_user_id)
+  ON CONFLICT (couple_id, user_id) DO NOTHING;
+
+  UPDATE public.profiles
+  SET space_id = v_invite.couple_id
+  WHERE id = v_user_id;
+
+  INSERT INTO public.location_sharing (couple_id, user_id, enabled)
+  VALUES (v_invite.couple_id, v_user_id, true)
+  ON CONFLICT (couple_id, user_id) DO UPDATE SET enabled = true;
+
+  UPDATE public.couple_spaces
+  SET status = 'paired'
+  WHERE id = v_invite.couple_id;
+
+  UPDATE public.invitations
+  SET used_at = now(),
+      used_by = v_user_id
+  WHERE id = v_invite.id;
+
+  RETURN jsonb_build_object(
+    'success', true,
+    'message', 'Berhasil terhubung dengan pasangan!',
+    'couple_id', v_invite.couple_id
+  );
+END;
+$$ LANGUAGE plpgsql SECURITY DEFINER;
+
+GRANT EXECUTE ON FUNCTION public.create_pairing_code() TO authenticated;
+GRANT EXECUTE ON FUNCTION public.join_couple_space(text) TO authenticated;
 
 -- ====================================================================
 -- SUPABASE STORAGE BUCKET INSTRUCTIONS

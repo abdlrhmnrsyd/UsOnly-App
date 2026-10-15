@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/background_service.dart';
 import '../../../core/socket_service.dart';
 import '../domain/notification_model.dart';
 
@@ -32,6 +33,11 @@ class NotificationsRepository {
         );
         _notifications.insert(0, notif);
         _streamController.add(List.unmodifiable(_notifications));
+
+        AppBackgroundService.showAlertNotification(
+          title: notif.title,
+          body: notif.body,
+        );
       }
     });
 
@@ -51,6 +57,11 @@ class NotificationsRepository {
         );
         _notifications.insert(0, notif);
         _streamController.add(List.unmodifiable(_notifications));
+
+        AppBackgroundService.showAlertNotification(
+          title: notif.title,
+          body: notif.body,
+        );
       }
     });
   }

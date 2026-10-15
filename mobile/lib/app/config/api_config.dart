@@ -1,15 +1,9 @@
-import 'dart:io' show Platform;
-import 'package:flutter/foundation.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
 class ApiConfig {
   static const String _keyCustomBaseUrl = 'usonly_custom_base_url';
 
-  static String get defaultHost {
-    if (kIsWeb) return 'http://localhost:5000';
-    if (Platform.isAndroid) return 'http://10.0.2.2:5000';
-    return 'http://localhost:5000';
-  }
+  static String get defaultHost => 'https://usonlyapp-y5vbp4nl.b4a.run';
 
   static String _baseUrl = defaultHost;
 

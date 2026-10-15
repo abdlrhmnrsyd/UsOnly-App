@@ -31,7 +31,7 @@ class UserModel {
     return UserModel(
       uid: json['id']?.toString() ?? json['uid']?.toString() ?? '',
       email: json['email']?.toString() ?? '',
-      displayName: json['full_name']?.toString() ?? json['displayName']?.toString() ?? 'User',
+      displayName: json['display_name']?.toString() ?? json['full_name']?.toString() ?? json['displayName']?.toString() ?? 'User',
       nickname: json['nickname']?.toString() ?? '',
       photoUrl: json['avatar_url']?.toString() ?? json['photoUrl']?.toString(),
       coupleId: json['space_id']?.toString() ?? json['coupleId']?.toString(),

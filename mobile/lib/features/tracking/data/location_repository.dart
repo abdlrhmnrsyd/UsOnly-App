@@ -2,32 +2,33 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:geolocator/geolocator.dart';
-import '../../../core/api_client.dart';
+import 'package:supabase_flutter/supabase_flutter.dart';
+import '../../../core/background_service.dart';
 import '../../../core/socket_service.dart';
 import '../domain/location_model.dart';
 
 final locationRepositoryProvider = Provider<LocationRepository>((ref) {
-  final apiClient = ref.watch(apiClientProvider);
   final socketService = ref.watch(socketServiceProvider);
-  return LocationRepository(apiClient, socketService);
+  return LocationRepository(socketService);
 });
 
 class LocationRepository {
-  final ApiClient _apiClient;
   final SocketService _socketService;
+  SupabaseClient get _supabase => Supabase.instance.client;
+
   StreamSubscription<Position>? _positionSubscription;
   Timer? _heartbeatTimer;
   Timer? _pollTimer;
-  bool _isLive = false;
-  final ValueNotifier<bool> liveSharingNotifier = ValueNotifier<bool>(false);
+  bool _isLive = true;
+  final ValueNotifier<bool> liveSharingNotifier = ValueNotifier<bool>(true);
 
   final StreamController<Map<String, LocationModel>> _locationsController =
       StreamController<Map<String, LocationModel>>.broadcast();
 
   final Map<String, LocationModel> _currentLocations = {};
 
-  LocationRepository(this._apiClient, this._socketService) {
-    // Listen to real-time socket events for partner location
+  LocationRepository(this._socketService) {
+    // Listen to real-time events for partner location
     _socketService.on('partner_location_updated', (data) {
       if (data is Map<String, dynamic>) {
         final loc = LocationModel.fromJson(data);
@@ -42,36 +43,62 @@ class LocationRepository {
   bool get isLiveSharing => _isLive;
 
   Stream<Map<String, LocationModel>> watchCoupleLocations(String coupleId) {
-    // Initial fetch from backend
-    _fetchLocations();
+    _fetchLocations(coupleId);
 
-    // Start periodic background polling as backup to socket
     _pollTimer?.cancel();
-    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _fetchLocations());
+    _pollTimer = Timer.periodic(const Duration(seconds: 15), (_) => _fetchLocations(coupleId));
 
     return _locationsController.stream;
   }
 
-  Future<void> _fetchLocations() async {
+  Future<void> _fetchLocations([String? spaceId]) async {
     try {
-      final res = await _apiClient.get('/location');
-      if (res['success'] == true) {
-        if (res['my_location'] != null) {
-          final myLoc = LocationModel.fromJson(Map<String, dynamic>.from(res['my_location']));
-          if (myLoc.uid.isNotEmpty) {
-            _currentLocations[myLoc.uid] = myLoc;
-          }
-        }
-        if (res['partner_location'] != null) {
-          final partnerLoc = LocationModel.fromJson(Map<String, dynamic>.from(res['partner_location']));
-          if (partnerLoc.uid.isNotEmpty) {
-            _currentLocations[partnerLoc.uid] = partnerLoc;
-          }
-        }
-        _locationsController.add(Map.unmodifiable(_currentLocations));
+      final user = _supabase.auth.currentUser;
+      if (user == null) return;
+
+      String actualSpaceId = spaceId ?? '';
+      if (actualSpaceId.isEmpty) {
+        final profile = await _supabase
+            .from('profiles')
+            .select('space_id')
+            .eq('id', user.id)
+            .maybeSingle();
+        actualSpaceId = profile?['space_id']?.toString() ?? '';
       }
+
+      if (actualSpaceId.isEmpty) return;
+
+      final rows = await _supabase
+          .from('locations')
+          .select('*, profiles(display_name, nickname, avatar_url)')
+          .eq('couple_id', actualSpaceId);
+
+      for (final r in rows) {
+        final uid = r['user_id']?.toString() ?? '';
+        if (uid.isNotEmpty) {
+          final profileData = r['profiles'] as Map<String, dynamic>?;
+          final name = profileData?['nickname'] ?? profileData?['display_name'] ?? 'Partner';
+          final avatar = profileData?['avatar_url'];
+
+          final loc = LocationModel(
+            uid: uid,
+            displayName: name,
+            photoUrl: avatar,
+            latitude: (r['latitude'] as num).toDouble(),
+            longitude: (r['longitude'] as num).toDouble(),
+            placeLabel: r['address_label']?.toString() ?? r['status_note']?.toString() ?? 'Di Lokasi 📍',
+            batteryLevel: 88,
+            isLive: true,
+            updatedAt: r['updated_at'] != null
+                ? DateTime.tryParse(r['updated_at'].toString()) ?? DateTime.now()
+                : DateTime.now(),
+          );
+          _currentLocations[uid] = loc;
+        }
+      }
+      _locationsController.add(Map.unmodifiable(_currentLocations));
     } catch (e) {
-      debugPrint('Error fetching locations: $e');
+      debugPrint('Error fetching locations from Supabase: $e');
     }
   }
 
@@ -122,9 +149,21 @@ class LocationRepository {
     liveSharingNotifier.value = true;
 
     try {
-      await _apiClient.post('/location/toggle-consent', {
-        'is_sharing_enabled': true,
+      await _supabase.from('location_sharing').upsert({
+        'couple_id': coupleId,
+        'user_id': uid,
+        'enabled': true,
+        'updated_at': DateTime.now().toIso8601String(),
       });
+    } catch (_) {}
+
+    // Sync user context to persistent background service
+    try {
+      await AppBackgroundService.syncUserContext(
+        userId: uid,
+        spaceId: coupleId,
+        partnerName: displayName,
+      );
     } catch (_) {}
 
     // Push initial location
@@ -144,13 +183,29 @@ class LocationRepository {
     await _positionSubscription?.cancel();
     _heartbeatTimer?.cancel();
 
-    // Listen to real-time GPS stream
+    // Listen to real-time GPS stream with Android Foreground service support
     try {
-      _positionSubscription = Geolocator.getPositionStream(
-        locationSettings: const LocationSettings(
+      LocationSettings locationSettings;
+      if (defaultTargetPlatform == TargetPlatform.android) {
+        locationSettings = AndroidSettings(
           accuracy: LocationAccuracy.high,
           distanceFilter: 5,
-        ),
+          intervalDuration: const Duration(seconds: 15),
+          foregroundNotificationConfig: const ForegroundNotificationConfig(
+            notificationTitle: "UsOnly - Berbagi Lokasi ❤️",
+            notificationText: "Lokasi otomatis aktif berbagi bersama pasangan",
+            enableWakeLock: true,
+          ),
+        );
+      } else {
+        locationSettings = const LocationSettings(
+          accuracy: LocationAccuracy.high,
+          distanceFilter: 5,
+        );
+      }
+
+      _positionSubscription = Geolocator.getPositionStream(
+        locationSettings: locationSettings,
       ).listen((pos) {
         if (_isLive) {
           updateLocation(
@@ -204,8 +259,11 @@ class LocationRepository {
     _heartbeatTimer = null;
 
     try {
-      await _apiClient.post('/location/toggle-consent', {
-        'is_sharing_enabled': false,
+      await _supabase.from('location_sharing').upsert({
+        'couple_id': coupleId,
+        'user_id': uid,
+        'enabled': false,
+        'updated_at': DateTime.now().toIso8601String(),
       });
       // Broadcast via socket
       _socketService.emit('location_update', {
@@ -257,19 +315,22 @@ class LocationRepository {
     _currentLocations[uid] = model;
     _locationsController.add(Map.unmodifiable(_currentLocations));
 
-    // Send to backend REST API
+    // Upsert in Supabase
     try {
-      await _apiClient.post('/location/update', {
+      await _supabase.from('locations').upsert({
+        'couple_id': coupleId,
+        'user_id': uid,
         'latitude': lat,
         'longitude': lng,
         'status_note': placeLabel ?? 'Di Rumah 🏡',
-        'battery_level': 88,
+        'address_label': placeLabel ?? 'Di Rumah 🏡',
+        'updated_at': DateTime.now().toIso8601String(),
       });
     } catch (e) {
-      debugPrint('REST update location notice: $e');
+      debugPrint('Supabase upsert location notice: $e');
     }
 
-    // Broadcast in real-time via Socket.IO
+    // Broadcast in real-time
     try {
       _socketService.emit('location_update', model.toJson());
     } catch (e) {

@@ -1,5 +1,7 @@
 import 'package:flutter_riverpod/flutter_riverpod.dart';
+import '../../../core/background_service.dart';
 import '../../../core/socket_service.dart';
+import '../../tracking/data/location_repository.dart';
 import '../data/auth_repository.dart';
 import 'user_model.dart';
 
@@ -72,9 +74,27 @@ class AuthNotifier extends Notifier<AuthState> {
         );
 
         if (space != null && user.uid.isNotEmpty) {
+          final spaceId = space['id'].toString();
+          final partnerName = partner?.displayName ?? partner?.nickname ?? 'Doi';
+
           ref.read(socketServiceProvider).connect(
-                spaceId: space['id'].toString(),
+                spaceId: spaceId,
                 userId: user.uid,
+              );
+
+          // Sync with background service for always-on location & closed-app notifications
+          AppBackgroundService.syncUserContext(
+            userId: user.uid,
+            spaceId: spaceId,
+            partnerName: partnerName,
+          );
+
+          // Auto-start live location sharing by default
+          ref.read(locationRepositoryProvider).startLiveSharing(
+                coupleId: spaceId,
+                uid: user.uid,
+                displayName: user.displayName,
+                photoUrl: user.photoUrl,
               );
         }
         return;
@@ -103,9 +123,27 @@ class AuthNotifier extends Notifier<AuthState> {
         );
 
         if (space != null && user.uid.isNotEmpty) {
+          final spaceId = space['id'].toString();
+          final partnerName = partner?.displayName ?? partner?.nickname ?? 'Doi';
+
           ref.read(socketServiceProvider).connect(
-                spaceId: space['id'].toString(),
+                spaceId: spaceId,
                 userId: user.uid,
+              );
+
+          // Sync with background service for always-on location & closed-app notifications
+          AppBackgroundService.syncUserContext(
+            userId: user.uid,
+            spaceId: spaceId,
+            partnerName: partnerName,
+          );
+
+          // Auto-start live location sharing by default
+          ref.read(locationRepositoryProvider).startLiveSharing(
+                coupleId: spaceId,
+                uid: user.uid,
+                displayName: user.displayName,
+                photoUrl: user.photoUrl,
               );
         }
       }

@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:go_router/go_router.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../notifications/presentation/in_app_notification_banner.dart';
+import '../../updater/data/app_update_service.dart';
+import '../../updater/presentation/update_dialog.dart';
 
-class MainShellScreen extends StatelessWidget {
+class MainShellScreen extends StatefulWidget {
   final StatefulNavigationShell navigationShell;
 
   const MainShellScreen({
@@ -11,10 +13,32 @@ class MainShellScreen extends StatelessWidget {
     required this.navigationShell,
   });
 
+  @override
+  State<MainShellScreen> createState() => _MainShellScreenState();
+}
+
+class _MainShellScreenState extends State<MainShellScreen> {
+  @override
+  void initState() {
+    super.initState();
+    _checkAppUpdate();
+  }
+
+  Future<void> _checkAppUpdate() async {
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      try {
+        final update = await AppUpdateService.checkForUpdate();
+        if (update != null && mounted) {
+          UpdateDialog.show(context, update);
+        }
+      } catch (_) {}
+    });
+  }
+
   void _onTap(int index) {
-    navigationShell.goBranch(
+    widget.navigationShell.goBranch(
       index,
-      initialLocation: index == navigationShell.currentIndex,
+      initialLocation: index == widget.navigationShell.currentIndex,
     );
   }
 
@@ -25,7 +49,7 @@ class MainShellScreen extends StatelessWidget {
 
     return InAppNotificationBanner(
       child: Scaffold(
-        body: navigationShell,
+        body: widget.navigationShell,
         bottomNavigationBar: Container(
           decoration: BoxDecoration(
             border: Border(
@@ -36,7 +60,7 @@ class MainShellScreen extends StatelessWidget {
             ),
           ),
           child: NavigationBar(
-            selectedIndex: navigationShell.currentIndex,
+            selectedIndex: widget.navigationShell.currentIndex,
             onDestinationSelected: _onTap,
             backgroundColor: isDark ? AppColors.surfaceDark : AppColors.surfaceLight,
             indicatorColor: AppColors.primaryLight,

@@ -52,7 +52,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _incomingSub = ref.read(chatRepositoryProvider).watchIncomingMessages().listen((msg) {
       if (mounted) {
         setState(() {
-          _messages.add(msg);
+          if (!_messages.any((m) => m.id == msg.id)) {
+            _messages.add(msg);
+          }
         });
         _scrollToBottom();
       }
@@ -86,8 +88,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     _textController.clear();
     try {
       final msg = await ref.read(chatRepositoryProvider).sendTextMessage(text);
-      setState(() => _messages.add(msg));
-      _scrollToBottom();
+      if (mounted) {
+        setState(() {
+          if (!_messages.any((m) => m.id == msg.id)) {
+            _messages.add(msg);
+          }
+        });
+        _scrollToBottom();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal mengirim pesan: $e')));
@@ -102,8 +110,14 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
             caption: caption,
             type: type,
           );
-      setState(() => _messages.add(msg));
-      _scrollToBottom();
+      if (mounted) {
+        setState(() {
+          if (!_messages.any((m) => m.id == msg.id)) {
+            _messages.add(msg);
+          }
+        });
+        _scrollToBottom();
+      }
     } catch (e) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal mengirim media: $e')));

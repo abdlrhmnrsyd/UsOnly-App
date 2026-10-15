@@ -16,7 +16,7 @@ export const useSocketStore = create((set, get) => ({
     }
 
     const isDev = window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1';
-    const socketUrl = isDev && window.location.port === '5173' ? 'http://localhost:5000' : window.location.origin;
+    const socketUrl = import.meta.env.VITE_SOCKET_URL || (isDev && window.location.port === '5173' ? 'http://localhost:5000' : window.location.origin);
     const socket = io(socketUrl, {
       transports: ['websocket', 'polling'],
       reconnectionAttempts: 10,
