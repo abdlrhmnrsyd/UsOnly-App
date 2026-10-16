@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:io';
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:intl/intl.dart';
 import '../../../app/theme/app_colors.dart';
@@ -24,6 +25,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   final List<MessageModel> _messages = [];
   bool _isLoading = true;
   StreamSubscription? _incomingSub;
+  MessageModel? _replyingTo;
 
   @override
   void initState() {
@@ -101,30 +103,24 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final text = _textController.text.trim();
     if (text.isEmpty) return;
 
+    final reply = _replyingTo;
     _textController.clear();
-    try {
-      final msg = await ref.read(chatRepositoryProvider).sendTextMessage(text);
-      if (mounted) {
-        setState(() {
-          if (!_messages.any((m) => m.id == msg.id)) {
-            _messages.add(msg);
-          }
-        });
-        _scrollToBottom();
-      }
-    } catch (e) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal mengirim pesan: $e')));
-      }
-    }
-  }
+    setState(() => _replyingTo = null);
 
-  Future<void> _handleMediaSelected(File file, String? caption, String type) async {
     try {
-      final msg = await ref.read(chatRepositoryProvider).sendMediaMessage(
-            file: file,
-            caption: caption,
-            type: type,
+      final auth = ref.read(authStateProvider);
+      final partnerName = auth.partner?.nickname.isNotEmpty == true
+          ? auth.partner!.nickname
+          : (auth.partner?.displayName ?? 'Doi');
+      final replySender = reply != null
+          ? (reply.senderUid == auth.user?.uid ? 'Kamu' : partnerName)
+          : null;
+
+      final msg = await ref.read(chatRepositoryProvider).sendTextMessage(
+            text,
+            replyToId: reply?.id,
+            replyToContent: reply?.content,
+            replyToSender: replySender,
           );
       if (mounted) {
         setState(() {
@@ -136,7 +132,57 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
       }
     } catch (e) {
       if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(SnackBar(content: Text('Gagal mengirim media: $e')));
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal mengirim pesan: $e')),
+        );
+      }
+    }
+  }
+
+  Future<void> _handleMediaSelected(File file, String? caption, String type) async {
+    final auth = ref.read(authStateProvider);
+    final user = auth.user;
+    final partner = auth.partner;
+
+    if (user == null || user.coupleId == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Belum terhubung dengan pasangan.')),
+      );
+      return;
+    }
+
+    try {
+      final reply = _replyingTo;
+      setState(() => _replyingTo = null);
+      final partnerName = partner?.nickname.isNotEmpty == true
+          ? partner!.nickname
+          : (partner?.displayName ?? 'Doi');
+      final replySender = reply != null
+          ? (reply.senderUid == user.uid ? 'Kamu' : partnerName)
+          : null;
+
+      final msg = await ref.read(chatRepositoryProvider).sendMediaMessage(
+            file: file,
+            caption: caption,
+            type: type,
+            replyToId: reply?.id,
+            replyToContent: reply?.content,
+            replyToSender: replySender,
+          );
+
+      if (mounted) {
+        setState(() {
+          if (!_messages.any((m) => m.id == msg.id)) {
+            _messages.add(msg);
+          }
+        });
+        _scrollToBottom();
+      }
+    } catch (e) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          SnackBar(content: Text('Gagal mengirim foto: $e')),
+        );
       }
     }
   }
@@ -145,7 +191,7 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     final auth = ref.read(authStateProvider);
     final myNickname = auth.user?.nickname.isNotEmpty == true
         ? auth.user!.nickname
-        : (auth.user?.displayName ?? 'Kamu');
+        : (auth.user?.displayName ?? 'Pasanganmu');
 
     showModalBottomSheet(
       context: context,
@@ -215,12 +261,84 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
     );
   }
 
+  void _showMessageOptions(MessageModel msg, bool isMe) {
+    HapticFeedback.mediumImpact();
+    final emojis = ['❤️', '👍', '😂', '😮', '😢', '🙏', '🥰'];
+
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = Theme.of(context).brightness == Brightness.dark;
+        return Container(
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xFF1E1B24) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 16),
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                // Quick Emoji Reactions
+                SingleChildScrollView(
+                  scrollDirection: Axis.horizontal,
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: emojis.map((e) {
+                      return InkWell(
+                        onTap: () {
+                          Navigator.pop(ctx);
+                          ref.read(chatRepositoryProvider).reactToMessage(msg.id, e);
+                        },
+                        borderRadius: BorderRadius.circular(20),
+                        child: Container(
+                          padding: const EdgeInsets.all(10),
+                          child: Text(e, style: const TextStyle(fontSize: 26)),
+                        ),
+                      );
+                    }).toList(),
+                  ),
+                ),
+                const Divider(),
+                ListTile(
+                  leading: const Icon(Icons.reply_rounded, color: AppColors.primary),
+                  title: const Text('Balas Pesan', style: TextStyle(fontWeight: FontWeight.w600)),
+                  onTap: () {
+                    Navigator.pop(ctx);
+                    setState(() => _replyingTo = msg);
+                  },
+                ),
+                if (msg.content.isNotEmpty)
+                  ListTile(
+                    leading: const Icon(Icons.copy_rounded, color: Colors.blueAccent),
+                    title: const Text('Salin Teks'),
+                    onTap: () {
+                      Navigator.pop(ctx);
+                      Clipboard.setData(ClipboardData(text: msg.content));
+                      ScaffoldMessenger.of(context).showSnackBar(
+                        const SnackBar(content: Text('Pesan disalin ke papan klip')),
+                      );
+                    },
+                  ),
+              ],
+            ),
+          ),
+        );
+      },
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     final auth = ref.watch(authStateProvider);
     final partner = auth.partner;
-    final partnerName = partner?.nickname.isNotEmpty == true ? partner!.nickname : (partner?.displayName ?? 'Pasangan');
+    final partnerName = partner?.nickname.isNotEmpty == true
+        ? partner!.nickname
+        : (partner?.displayName ?? 'Pasangan');
     final isDark = Theme.of(context).brightness == Brightness.dark;
+    final myUid = auth.user?.uid ?? '';
 
     return Scaffold(
       appBar: AppBar(
@@ -318,108 +436,322 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
                         itemCount: _messages.length,
                         itemBuilder: (context, index) {
                           final msg = _messages[index];
-                          final isMe = msg.senderUid == auth.user?.uid;
+                          final isMe = msg.senderUid == myUid;
                           final timeStr = DateFormat('HH:mm').format(msg.createdAt);
 
-                          if (msg.type == 'pap' || msg.type == 'image') {
-                            return _buildPhotoBubble(msg, isMe, isDark, timeStr);
-                          }
-                          return _buildTextBubble(msg, isMe, isDark, timeStr);
+                          return Dismissible(
+                            key: ValueKey('msg_${msg.id}_$index'),
+                            direction: DismissDirection.startToEnd,
+                            confirmDismiss: (_) async {
+                              HapticFeedback.lightImpact();
+                              setState(() => _replyingTo = msg);
+                              return false;
+                            },
+                            background: Container(
+                              alignment: Alignment.centerLeft,
+                              padding: const EdgeInsets.only(left: 16),
+                              child: const Icon(Icons.reply_rounded, color: AppColors.primary, size: 26),
+                            ),
+                            child: GestureDetector(
+                              onLongPress: () => _showMessageOptions(msg, isMe),
+                              child: (msg.type == 'pap' || msg.type == 'image')
+                                  ? _buildPhotoBubble(msg, isMe, isDark, timeStr, partnerName, myUid)
+                                  : _buildTextBubble(msg, isMe, isDark, timeStr, partnerName, myUid),
+                            ),
+                          );
                         },
                       ),
           ),
+          _buildReplyBanner(isDark, partnerName, myUid),
           _buildComposer(isDark),
         ],
       ),
     );
   }
 
-  Widget _buildTextBubble(MessageModel msg, bool isMe, bool isDark, String timeStr) {
-    return Align(
-      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 4),
-        padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-        constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.75),
-        decoration: BoxDecoration(
-          color: isMe
-              ? AppColors.primary
-              : (isDark ? AppColors.surfaceSubtleDark : AppColors.surfaceSubtleLight),
-          borderRadius: BorderRadius.only(
-            topLeft: const Radius.circular(18),
-            topRight: const Radius.circular(18),
-            bottomLeft: Radius.circular(isMe ? 18 : 4),
-            bottomRight: Radius.circular(isMe ? 4 : 18),
+  Widget _buildReplyBanner(bool isDark, String partnerName, String myUid) {
+    if (_replyingTo == null) return const SizedBox.shrink();
+    final isReplyingToMe = _replyingTo!.senderUid == myUid;
+    final name = isReplyingToMe ? 'Kamu' : partnerName;
+
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF23202A) : Colors.grey.shade100,
+        border: const Border(
+          left: BorderSide(color: AppColors.primary, width: 4),
+        ),
+      ),
+      child: Row(
+        children: [
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              mainAxisSize: MainAxisSize.min,
+              children: [
+                Text(
+                  'Membalas $name',
+                  style: const TextStyle(
+                    color: AppColors.primary,
+                    fontWeight: FontWeight.bold,
+                    fontSize: 12,
+                  ),
+                ),
+                const SizedBox(height: 2),
+                Text(
+                  _replyingTo!.content.isNotEmpty
+                      ? _replyingTo!.content
+                      : (_replyingTo!.type == 'image' ? '📸 Foto / PAP' : 'Pesan'),
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  style: TextStyle(
+                    color: isDark ? Colors.white70 : Colors.black87,
+                    fontSize: 12,
+                  ),
+                ),
+              ],
+            ),
           ),
-        ),
-        child: Column(
-          crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
-          children: [
-            Text(
-              msg.text ?? '',
-              style: TextStyle(
-                color: isMe ? Colors.white : (isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight),
-                fontSize: 14,
-              ),
-            ),
-            const SizedBox(height: 4),
-            Text(
-              timeStr,
-              style: TextStyle(
-                color: isMe ? Colors.white70 : Colors.grey,
-                fontSize: 10,
-              ),
-            ),
-          ],
-        ),
+          IconButton(
+            icon: const Icon(Icons.close_rounded, size: 20),
+            onPressed: () => setState(() => _replyingTo = null),
+          ),
+        ],
       ),
     );
   }
 
-  Widget _buildPhotoBubble(MessageModel msg, bool isMe, bool isDark, String timeStr) {
+  Widget _buildQuotedBox(MessageModel msg, bool isMe, bool isDark, String partnerName, String myUid) {
+    if (msg.replyToId == null && msg.replyToContent == null) {
+      return const SizedBox.shrink();
+    }
+
+    final parent = _messages.cast<MessageModel?>().firstWhere(
+      (m) => m?.id == msg.replyToId,
+      orElse: () => null,
+    );
+
+    final senderName = parent != null
+        ? (parent.senderUid == myUid ? 'Kamu' : partnerName)
+        : (msg.replyToSender ?? 'Pesan');
+    final content = parent?.content.isNotEmpty == true
+        ? parent!.content
+        : (msg.replyToContent ?? (parent?.type == 'image' ? '📸 Foto' : 'Pesan'));
+
+    return Container(
+      margin: const EdgeInsets.only(bottom: 6),
+      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+      decoration: BoxDecoration(
+        color: (isMe ? Colors.black26 : (isDark ? Colors.black38 : Colors.grey.shade200)),
+        borderRadius: BorderRadius.circular(10),
+        border: Border(
+          left: BorderSide(
+            color: isMe ? Colors.white : AppColors.primary,
+            width: 3.5,
+          ),
+        ),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            senderName,
+            style: TextStyle(
+              fontSize: 11,
+              fontWeight: FontWeight.bold,
+              color: isMe ? Colors.white : AppColors.primary,
+            ),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            content,
+            maxLines: 2,
+            overflow: TextOverflow.ellipsis,
+            style: TextStyle(
+              fontSize: 12,
+              color: isMe ? Colors.white70 : (isDark ? Colors.white70 : Colors.black87),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildTextBubble(MessageModel msg, bool isMe, bool isDark, String timeStr, String partnerName, String myUid) {
+    final hasReply = msg.replyToId != null || msg.replyToContent != null;
+
     return Align(
       alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
-      child: Container(
-        margin: const EdgeInsets.symmetric(vertical: 6),
-        width: MediaQuery.of(context).size.width * 0.72,
-        decoration: BoxDecoration(
-          color: isMe
-              ? AppColors.primaryLight.withValues(alpha: 0.15)
-              : (isDark ? AppColors.surfaceDark : AppColors.surfaceLight),
-          borderRadius: BorderRadius.circular(18),
-          border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
-        ),
-        padding: const EdgeInsets.all(10),
-        child: Column(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: [
-            if (msg.mediaUrl != null)
-              ClipRRect(
-                borderRadius: BorderRadius.circular(14),
-                child: AppImageView(
-                  imageUrl: msg.mediaUrl!,
-                  height: 200,
-                  width: double.infinity,
-                  fit: BoxFit.cover,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 4),
+            padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+            constraints: BoxConstraints(maxWidth: MediaQuery.of(context).size.width * 0.78),
+            decoration: BoxDecoration(
+              color: isMe
+                  ? AppColors.primary
+                  : (isDark ? AppColors.surfaceSubtleDark : AppColors.surfaceSubtleLight),
+              borderRadius: BorderRadius.only(
+                topLeft: const Radius.circular(18),
+                topRight: const Radius.circular(18),
+                bottomLeft: Radius.circular(isMe ? 18 : 4),
+                bottomRight: Radius.circular(isMe ? 4 : 18),
+              ),
+              boxShadow: [
+                BoxShadow(
+                  color: Colors.black.withValues(alpha: 0.06),
+                  blurRadius: 4,
+                  offset: const Offset(0, 2),
                 ),
-              ),
-            if (msg.text != null && msg.text!.isNotEmpty) ...[
-              const SizedBox(height: 8),
-              Text(
-                msg.text!,
-                style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
-              ),
-            ],
-            const SizedBox(height: 4),
-            Align(
-              alignment: Alignment.centerRight,
-              child: Text(
-                timeStr,
-                style: const TextStyle(fontSize: 10, color: Colors.grey),
+              ],
+            ),
+            child: Column(
+              crossAxisAlignment: isMe ? CrossAxisAlignment.end : CrossAxisAlignment.start,
+              children: [
+                if (hasReply) _buildQuotedBox(msg, isMe, isDark, partnerName, myUid),
+                Text(
+                  msg.text ?? '',
+                  style: TextStyle(
+                    color: isMe ? Colors.white : (isDark ? AppColors.textPrimaryDark : AppColors.textPrimaryLight),
+                    fontSize: 14,
+                  ),
+                ),
+                const SizedBox(height: 4),
+                Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Text(
+                      timeStr,
+                      style: TextStyle(
+                        color: isMe ? Colors.white70 : Colors.grey,
+                        fontSize: 10,
+                      ),
+                    ),
+                    if (isMe) ...[
+                      const SizedBox(width: 4),
+                      Icon(
+                        Icons.done_all_rounded,
+                        size: 15,
+                        color: msg.isReadBy('read') ? const Color(0xFF34B7F1) : Colors.white70,
+                      ),
+                    ],
+                  ],
+                ),
+              ],
+            ),
+          ),
+          if (msg.reaction != null && msg.reaction!.isNotEmpty)
+            Positioned(
+              bottom: -6,
+              right: isMe ? 4 : null,
+              left: isMe ? null : 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF2A2732) : Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: Text(msg.reaction!, style: const TextStyle(fontSize: 12)),
               ),
             ),
-          ],
-        ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPhotoBubble(MessageModel msg, bool isMe, bool isDark, String timeStr, String partnerName, String myUid) {
+    final hasReply = msg.replyToId != null || msg.replyToContent != null;
+
+    return Align(
+      alignment: isMe ? Alignment.centerRight : Alignment.centerLeft,
+      child: Stack(
+        clipBehavior: Clip.none,
+        children: [
+          Container(
+            margin: const EdgeInsets.symmetric(vertical: 6),
+            width: MediaQuery.of(context).size.width * 0.74,
+            decoration: BoxDecoration(
+              color: isMe
+                  ? AppColors.primaryLight.withValues(alpha: 0.15)
+                  : (isDark ? AppColors.surfaceDark : AppColors.surfaceLight),
+              borderRadius: BorderRadius.circular(18),
+              border: Border.all(color: AppColors.primary.withValues(alpha: 0.3)),
+            ),
+            padding: const EdgeInsets.all(10),
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                if (hasReply) _buildQuotedBox(msg, isMe, isDark, partnerName, myUid),
+                if (msg.mediaUrl != null)
+                  ClipRRect(
+                    borderRadius: BorderRadius.circular(14),
+                    child: AppImageView(
+                      imageUrl: msg.mediaUrl!,
+                      height: 200,
+                      width: double.infinity,
+                      fit: BoxFit.cover,
+                    ),
+                  ),
+                if (msg.text != null && msg.text!.isNotEmpty) ...[
+                  const SizedBox(height: 8),
+                  Text(
+                    msg.text!,
+                    style: const TextStyle(fontWeight: FontWeight.w600, fontSize: 13),
+                  ),
+                ],
+                const SizedBox(height: 4),
+                Align(
+                  alignment: Alignment.centerRight,
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Text(
+                        timeStr,
+                        style: const TextStyle(fontSize: 10, color: Colors.grey),
+                      ),
+                      if (isMe) ...[
+                        const SizedBox(width: 4),
+                        Icon(
+                          Icons.done_all_rounded,
+                          size: 15,
+                          color: msg.isReadBy('read') ? const Color(0xFF34B7F1) : Colors.grey,
+                        ),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
+          ),
+          if (msg.reaction != null && msg.reaction!.isNotEmpty)
+            Positioned(
+              bottom: -4,
+              right: isMe ? 4 : null,
+              left: isMe ? null : 4,
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                decoration: BoxDecoration(
+                  color: isDark ? const Color(0xFF2A2732) : Colors.white,
+                  borderRadius: BorderRadius.circular(12),
+                  boxShadow: [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.15),
+                      blurRadius: 4,
+                    ),
+                  ],
+                ),
+                child: Text(msg.reaction!, style: const TextStyle(fontSize: 12)),
+              ),
+            ),
+        ],
       ),
     );
   }
@@ -489,9 +821,9 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
               child: TextField(
                 controller: _textController,
                 textCapitalization: TextCapitalization.sentences,
-                decoration: const InputDecoration(
-                  hintText: 'Ketik pesan...',
-                  contentPadding: EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+                decoration: InputDecoration(
+                  hintText: _replyingTo != null ? 'Ketik balasan...' : 'Ketik pesan...',
+                  contentPadding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
                 ),
                 onSubmitted: (_) => _sendMessage(),
               ),

@@ -144,7 +144,12 @@ class ChatRepository {
     return await fetchMessages();
   }
 
-  Future<MessageModel> sendTextMessage(String text) async {
+  Future<MessageModel> sendTextMessage(
+    String text, {
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSender,
+  }) async {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Belum login');
 
@@ -164,6 +169,7 @@ class ChatRepository {
       'sender_id': user.id,
       'message_type': 'text',
       'content': text.trim(),
+      'reply_to': replyToId,
       'created_at': DateTime.now().toIso8601String(),
     };
 
@@ -173,7 +179,11 @@ class ChatRepository {
         .select()
         .single();
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
+    final msgMap = Map<String, dynamic>.from(inserted);
+    if (replyToContent != null) msgMap['reply_to_content'] = replyToContent;
+    if (replyToSender != null) msgMap['reply_to_sender'] = replyToSender;
+
+    final msg = MessageModel.fromJson(msgMap);
     _socket.emitNewMessage(msg.toJson());
     _addOrUpdateMessage(msg);
     return msg;
@@ -187,6 +197,9 @@ class ChatRepository {
     required String content,
     String type = 'text',
     String? mediaUrl,
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSender,
   }) async {
     final dbType = (type == 'pap' || type == 'image') ? 'image' : type;
 
@@ -196,6 +209,7 @@ class ChatRepository {
       'message_type': dbType,
       'content': content,
       'media_url': mediaUrl,
+      'reply_to': replyToId,
       'created_at': DateTime.now().toIso8601String(),
     };
 
@@ -205,7 +219,11 @@ class ChatRepository {
         .select()
         .single();
 
-    final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
+    final msgMap = Map<String, dynamic>.from(inserted);
+    if (replyToContent != null) msgMap['reply_to_content'] = replyToContent;
+    if (replyToSender != null) msgMap['reply_to_sender'] = replyToSender;
+
+    final msg = MessageModel.fromJson(msgMap);
     _socket.emitNewMessage(msg.toJson());
     _addOrUpdateMessage(msg);
     return msg;
@@ -230,6 +248,9 @@ class ChatRepository {
     required File file,
     String? caption,
     required String type,
+    String? replyToId,
+    String? replyToContent,
+    String? replyToSender,
   }) async {
     final user = _supabase.auth.currentUser;
     if (user == null) throw Exception('Belum login');
@@ -253,6 +274,9 @@ class ChatRepository {
       content: caption ?? (type == 'pap' ? '📸 PAP Kilat' : 'Foto dikirim'),
       type: type == 'pap' ? 'image' : type,
       mediaUrl: fileUrl,
+      replyToId: replyToId,
+      replyToContent: replyToContent,
+      replyToSender: replyToSender,
     );
   }
 
@@ -348,6 +372,37 @@ class ChatRepository {
         .neq('sender_id', user.id)
         .eq('is_read', false)
         .catchError((_) {});
+  }
+
+  Future<void> reactToMessage(String messageId, String emoji) async {
+    try {
+      await _supabase.from('messages').update({'reaction': emoji}).eq('id', messageId);
+      final idx = _inMemoryMessages.indexWhere((m) => m.id == messageId);
+      if (idx >= 0) {
+        final old = _inMemoryMessages[idx];
+        final updated = MessageModel(
+          id: old.id,
+          senderUid: old.senderUid,
+          type: old.type,
+          text: old.text,
+          mediaUrl: old.mediaUrl,
+          caption: old.caption,
+          latitude: old.latitude,
+          longitude: old.longitude,
+          placeLabel: old.placeLabel,
+          reaction: emoji,
+          replyToId: old.replyToId,
+          replyToContent: old.replyToContent,
+          replyToSender: old.replyToSender,
+          createdAt: old.createdAt,
+          readBy: old.readBy,
+        );
+        _inMemoryMessages[idx] = updated;
+        _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+      }
+    } catch (e) {
+      debugPrint('[ChatRepository] Error reacting to message: $e');
+    }
   }
 
   void dispose() {

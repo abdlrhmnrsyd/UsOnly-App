@@ -9,6 +9,9 @@ class MessageModel {
   final double? longitude;
   final String? placeLabel;
   final String? reaction;
+  final String? replyToId;
+  final String? replyToContent;
+  final String? replyToSender;
   final DateTime createdAt;
   final List<String> readBy;
 
@@ -23,6 +26,9 @@ class MessageModel {
     this.longitude,
     this.placeLabel,
     this.reaction,
+    this.replyToId,
+    this.replyToContent,
+    this.replyToSender,
     required this.createdAt,
     this.readBy = const [],
   });
@@ -47,6 +53,9 @@ class MessageModel {
       longitude: json['longitude'] != null ? (json['longitude'] as num).toDouble() : null,
       placeLabel: json['place_label']?.toString() ?? json['placeLabel']?.toString(),
       reaction: json['reaction']?.toString(),
+      replyToId: json['reply_to']?.toString() ?? json['replyToId']?.toString(),
+      replyToContent: json['reply_to_content']?.toString() ?? json['replyToContent']?.toString(),
+      replyToSender: json['reply_to_sender']?.toString() ?? json['replyToSender']?.toString(),
       createdAt: json['created_at'] != null
           ? DateTime.tryParse(json['created_at'].toString()) ?? DateTime.now()
           : (json['createdAt'] != null
@@ -67,6 +76,9 @@ class MessageModel {
       'longitude': longitude,
       'place_label': placeLabel,
       'reaction': reaction,
+      'reply_to': replyToId,
+      'reply_to_content': replyToContent,
+      'reply_to_sender': replyToSender,
       'created_at': createdAt.toIso8601String(),
     };
   }

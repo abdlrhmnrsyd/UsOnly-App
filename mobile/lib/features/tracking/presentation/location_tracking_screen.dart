@@ -3,6 +3,7 @@ import 'package:flutter_map/flutter_map.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:go_router/go_router.dart';
 import 'package:latlong2/latlong.dart' hide Path;
+import 'package:geolocator/geolocator.dart';
 import 'package:url_launcher/url_launcher.dart';
 import '../../../app/theme/app_colors.dart';
 import '../../../core/battery_service.dart';
@@ -125,7 +126,45 @@ class _LocationTrackingScreenState extends ConsumerState<LocationTrackingScreen>
           placeLabel: _selectedStatus,
         );
 
-        if (mounted) {
+        // Check if Android has granted "Allow all the time"
+        final perm = await Geolocator.checkPermission();
+        if (perm != LocationPermission.always && mounted) {
+          showDialog(
+            context: context,
+            builder: (ctx) => AlertDialog(
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+              title: const Row(
+                children: [
+                  Icon(Icons.location_on_rounded, color: AppColors.primary),
+                  SizedBox(width: 8),
+                  Text('Lokasi Saat Ditutup', style: TextStyle(fontSize: 16, fontWeight: FontWeight.bold)),
+                ],
+              ),
+              content: const Text(
+                'Agar doi tetap bisa melacak lokasimu saat aplikasi ditutup atau dihapus dari recent apps, pilih "Izinkan sepanjang waktu" (Allow all the time) di setelan izin lokasi.',
+                style: TextStyle(fontSize: 13),
+              ),
+              actions: [
+                TextButton(
+                  onPressed: () => Navigator.pop(ctx),
+                  child: const Text('Nanti Saja'),
+                ),
+                ElevatedButton(
+                  style: ElevatedButton.styleFrom(
+                    backgroundColor: AppColors.primary,
+                    foregroundColor: Colors.white,
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  onPressed: () {
+                    Navigator.pop(ctx);
+                    Geolocator.openAppSettings();
+                  },
+                  child: const Text('Buka Pengaturan ⚙️'),
+                ),
+              ],
+            ),
+          );
+        } else if (mounted) {
           ScaffoldMessenger.of(context).showSnackBar(
             const SnackBar(
               content: Text('🟢 Live Location Aktif! Berbagi realtime dengan doi.'),

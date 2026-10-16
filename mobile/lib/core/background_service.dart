@@ -10,12 +10,12 @@ import '../app/config/supabase_config.dart';
 import 'battery_service.dart';
 
 const String foregroundChannelId = 'usonly_foreground';
-const String alertChannelId = 'usonly_alerts_v4';
+const String alertChannelId = 'usonly_alerts_v5';
 const int notificationId = 888;
 
 // Couple Heartbeat Vibration Pattern (Bump-bump... Bump-bump)
 final Int64List romanticVibrationPattern =
-    Int64List.fromList([0, 250, 150, 250, 150, 450]);
+    Int64List.fromList([0, 300, 150, 300, 150, 500]);
 
 class AppBackgroundService {
   static final FlutterLocalNotificationsPlugin _localNotifications =
@@ -97,6 +97,14 @@ class AppBackgroundService {
         onBackground: onIosBackground,
       ),
     );
+
+    // Ensure service is actively started
+    try {
+      final isRunning = await service.isRunning();
+      if (!isRunning) {
+        await service.startService();
+      }
+    } catch (_) {}
   }
 
   /// Sends updated user context (spaceId, userId, partnerName) to background service
@@ -128,7 +136,8 @@ class AppBackgroundService {
       'Pesan & Colekan Pasangan',
       channelDescription: 'Notifikasi getar dan suara pesan dari doi',
       importance: Importance.max,
-      priority: Priority.high,
+      priority: Priority.max,
+      fullScreenIntent: true,
       enableVibration: true,
       vibrationPattern: romanticVibrationPattern,
       playSound: true,
@@ -163,6 +172,15 @@ Future<bool> onIosBackground(ServiceInstance service) async {
 @pragma('vm:entry-point')
 void onStart(ServiceInstance service) async {
   DartPluginRegistrant.ensureInitialized();
+
+  // Elevate to Foreground Service on Android immediately so OS never kills process when swiped
+  if (service is AndroidServiceInstance) {
+    service.setAsForegroundService();
+    service.setForegroundNotificationInfo(
+      title: "UsOnly Terhubung ❤️",
+      content: "Menjaga koneksi lokasi & pesan pasangan",
+    );
+  }
 
   final localNotifications = FlutterLocalNotificationsPlugin();
   const androidInitSettings =
@@ -227,6 +245,12 @@ void onStart(ServiceInstance service) async {
                 title: title,
                 body: body,
               );
+
+              // Update last checked to avoid duplicate alerts from polling
+              final createdAt = record['created_at']?.toString();
+              if (createdAt != null) {
+                prefs.setString('bg_last_checked_msg', createdAt);
+              }
             }
           },
         )
@@ -253,8 +277,8 @@ void onStart(ServiceInstance service) async {
     setupRealtimeListener(currentSpaceId);
   }
 
-  // Periodic GPS Location updates & Polling every 20 seconds
-  Timer.periodic(const Duration(seconds: 20), (timer) async {
+  // Periodic GPS Location & Message Polling loop every 15 seconds
+  Timer.periodic(const Duration(seconds: 15), (timer) async {
     try {
       // Reload prefs to catch changes from UI isolate
       await prefs.reload();
@@ -304,21 +328,64 @@ void onStart(ServiceInstance service) async {
         return;
       }
 
-      // 1. Fetch current device GPS position (with fallback to last known)
+      // 1. HTTP Polling for incoming messages (Reliable fallback when closed app drops WebSocket)
+      final lastChecked = prefs.getString('bg_last_checked_msg') ??
+          DateTime.now().subtract(const Duration(minutes: 5)).toIso8601String();
+
+      try {
+        final newMsgs = await supabase
+            .from('messages')
+            .select('*')
+            .eq('couple_id', currentSpaceId)
+            .neq('sender_id', currentUserId)
+            .gt('created_at', lastChecked)
+            .order('created_at', ascending: true);
+
+        if (newMsgs.isNotEmpty) {
+          for (final record in newMsgs) {
+            final type = record['message_type']?.toString() ?? 'text';
+            String title = '❤️ Pesan dari $currentPartnerName';
+            String body = record['content']?.toString() ?? 'Mengirim pesan';
+
+            if (type == 'poke') {
+              title = '👉 Colekan Cinta!';
+              body = '$currentPartnerName baru saja mencolekmu ❤️';
+            } else if (type == 'image') {
+              body = '📷 Mengirimkan foto baru';
+            } else if (type == 'location') {
+              body = '📍 Membagikan lokasi terkini';
+            }
+
+            await AppBackgroundService.showAlertNotification(
+              title: title,
+              body: body,
+            );
+          }
+          final latestCreatedAt = newMsgs.last['created_at']?.toString() ??
+              DateTime.now().toIso8601String();
+          await prefs.setString('bg_last_checked_msg', latestCreatedAt);
+        }
+      } catch (e) {
+        debugPrint('[BackgroundService] Check messages notice: $e');
+      }
+
+      // 2. Fetch current device GPS position (with fallback to last known)
       Position? position;
       try {
         position = await Geolocator.getCurrentPosition(
           locationSettings: const LocationSettings(
             accuracy: LocationAccuracy.high,
-            timeLimit: Duration(seconds: 8),
+            timeLimit: Duration(seconds: 7),
           ),
         );
       } catch (_) {
-        position = await Geolocator.getLastKnownPosition();
+        try {
+          position = await Geolocator.getLastKnownPosition();
+        } catch (_) {}
       }
 
       if (position != null) {
-        // 2. Upload location directly to Supabase locations table
+        // 3. Upload location directly to Supabase locations table
         await supabase.from('locations').upsert({
           'couple_id': currentSpaceId,
           'user_id': currentUserId,
@@ -328,7 +395,7 @@ void onStart(ServiceInstance service) async {
           'updated_at': DateTime.now().toIso8601String(),
         });
 
-        // 3. Ensure location_sharing is enabled
+        // 4. Ensure location_sharing is enabled
         await supabase.from('location_sharing').upsert({
           'couple_id': currentSpaceId,
           'user_id': currentUserId,
@@ -337,13 +404,13 @@ void onStart(ServiceInstance service) async {
         });
       }
 
-      // 4. Sync real battery level to profile
+      // 5. Sync real battery level to profile
       final batteryLevel = await BatteryService.getBatteryLevel();
       await supabase.from('profiles').update({
         'battery_level': batteryLevel,
       }).eq('id', currentUserId);
 
-      // 5. Update foreground notification content
+      // 6. Update foreground notification content
       if (service is AndroidServiceInstance) {
         service.setForegroundNotificationInfo(
           title: "UsOnly Terhubung ❤️",
