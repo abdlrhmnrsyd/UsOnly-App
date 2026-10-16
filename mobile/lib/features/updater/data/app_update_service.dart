@@ -44,8 +44,16 @@ class AppUpdateService {
 
       final packageInfo = await PackageInfo.fromPlatform();
       final currentBuildNumber = int.tryParse(packageInfo.buildNumber) ?? 1;
+      final currentVersionName = packageInfo.version;
 
-      if (serverVersionCode > currentBuildNumber && apkUrl.isNotEmpty) {
+      final hasUpdate = _hasUpdate(
+        serverCode: serverVersionCode,
+        serverVersionName: serverVersionName,
+        localCode: currentBuildNumber,
+        localVersionName: currentVersionName,
+      );
+
+      if (hasUpdate && apkUrl.isNotEmpty) {
         return AppUpdateInfo(
           versionName: serverVersionName,
           versionCode: serverVersionCode,
@@ -58,6 +66,46 @@ class AppUpdateService {
       debugPrint('[AppUpdateService] Error checking for update: $e');
     }
     return null;
+  }
+
+  static bool _hasUpdate({
+    required int serverCode,
+    required String serverVersionName,
+    required int localCode,
+    required String localVersionName,
+  }) {
+    final normLocal = localCode >= 1000 ? (localCode % 1000) : localCode;
+    final normServer = serverCode >= 1000 ? (serverCode % 1000) : serverCode;
+
+    // 1. If already on the same version name and same or lower build code, no update!
+    if (serverVersionName.trim() == localVersionName.trim() && normServer <= normLocal) {
+      return false;
+    }
+
+    // 2. Compare semver names (e.g. "1.0.4" vs "1.0.3")
+    final semverCompare = _compareSemver(serverVersionName, localVersionName);
+    if (semverCompare > 0) return true;
+    if (semverCompare < 0) return false;
+
+    // 3. If version names are identical, check if server build number is newer
+    if (normServer > normLocal) return true;
+    if (serverCode > localCode && serverCode < 1000 && localCode < 1000) return true;
+
+    return false;
+  }
+
+  static int _compareSemver(String a, String b) {
+    try {
+      final aParts = a.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      final bParts = b.split('.').map((e) => int.tryParse(e) ?? 0).toList();
+      for (int i = 0; i < 3; i++) {
+        final aVal = i < aParts.length ? aParts[i] : 0;
+        final bVal = i < bParts.length ? bParts[i] : 0;
+        if (aVal > bVal) return 1;
+        if (aVal < bVal) return -1;
+      }
+    } catch (_) {}
+    return 0;
   }
 
   static Future<void> downloadAndInstall({

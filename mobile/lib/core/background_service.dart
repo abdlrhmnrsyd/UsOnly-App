@@ -10,8 +10,12 @@ import '../app/config/supabase_config.dart';
 import 'battery_service.dart';
 
 const String foregroundChannelId = 'usonly_foreground';
-const String alertChannelId = 'usonly_alerts';
+const String alertChannelId = 'usonly_alerts_v4';
 const int notificationId = 888;
+
+// Couple Heartbeat Vibration Pattern (Bump-bump... Bump-bump)
+final Int64List romanticVibrationPattern =
+    Int64List.fromList([0, 250, 150, 250, 150, 450]);
 
 class AppBackgroundService {
   static final FlutterLocalNotificationsPlugin _localNotifications =
@@ -51,16 +55,19 @@ class AppBackgroundService {
         ),
       );
 
-      // Channel 2: Alerts for incoming chat messages & love pokes (High importance, sound, vibrate)
+      // Channel 2: Alerts for incoming chat messages & love pokes (Max importance, sound, heartbeat vibration)
       await androidPlugin.createNotificationChannel(
-        const AndroidNotificationChannel(
+        AndroidNotificationChannel(
           alertChannelId,
           'Pesan & Colekan Pasangan',
-          description: 'Notifikasi saat pasangan mengirim pesan baru atau colekan cinta',
-          importance: Importance.high,
+          description: 'Notifikasi getar dan suara pesan/colekan dari doi',
+          importance: Importance.max,
           enableVibration: true,
+          vibrationPattern: romanticVibrationPattern,
           playSound: true,
           showBadge: true,
+          enableLights: true,
+          ledColor: const Color(0xFFFF4B72),
         ),
       );
 
@@ -73,10 +80,11 @@ class AppBackgroundService {
       androidConfiguration: AndroidConfiguration(
         onStart: onStart,
         autoStart: true,
+        autoStartOnBoot: true,
         isForegroundMode: true,
         notificationChannelId: foregroundChannelId,
         initialNotificationTitle: 'UsOnly Terhubung ❤️',
-        initialNotificationContent: 'Menjaga koneksi lokasi dengan pasangan...',
+        initialNotificationContent: 'Menjaga koneksi lokasi & pesan dengan doi...',
         foregroundServiceNotificationId: notificationId,
         foregroundServiceTypes: [
           AndroidForegroundType.location,
@@ -109,23 +117,34 @@ class AppBackgroundService {
     });
   }
 
-  /// Trigger a heads-up alert notification manually or from service
+  /// Trigger a heads-up alert notification with couple heartbeat vibration
   static Future<void> showAlertNotification({
     required String title,
     required String body,
     String? payload,
   }) async {
-    const androidDetails = AndroidNotificationDetails(
+    final androidDetails = AndroidNotificationDetails(
       alertChannelId,
       'Pesan & Colekan Pasangan',
-      channelDescription: 'Notifikasi saat pasangan mengirim pesan atau colekan',
-      importance: Importance.high,
+      channelDescription: 'Notifikasi getar dan suara pesan dari doi',
+      importance: Importance.max,
       priority: Priority.high,
       enableVibration: true,
+      vibrationPattern: romanticVibrationPattern,
       playSound: true,
       icon: '@mipmap/ic_launcher',
+      color: const Color(0xFFFF4B72),
+      enableLights: true,
+      ledColor: const Color(0xFFFF4B72),
+      subText: 'UsOnly ❤️',
+      category: AndroidNotificationCategory.message,
+      styleInformation: BigTextStyleInformation(
+        body,
+        contentTitle: title,
+        summaryText: 'UsOnly ❤️',
+      ),
     );
-    const details = NotificationDetails(android: androidDetails);
+    final details = NotificationDetails(android: androidDetails);
     await _localNotifications.show(
       id: DateTime.now().millisecondsSinceEpoch % 100000,
       title: title,
@@ -168,20 +187,7 @@ void onStart(ServiceInstance service) async {
   String currentSpaceId = prefs.getString('bg_space_id') ?? '';
   String currentPartnerName = prefs.getString('bg_partner_name') ?? 'Doi';
 
-  // Listen for context updates from UI isolate
-  service.on('updateContext').listen((event) {
-    if (event != null) {
-      currentUserId = event['userId']?.toString() ?? currentUserId;
-      currentSpaceId = event['spaceId']?.toString() ?? currentSpaceId;
-      currentPartnerName = event['partnerName']?.toString() ?? currentPartnerName;
-    }
-  });
-
-  service.on('stopService').listen((event) {
-    service.stopSelf();
-  });
-
-  // Setup Realtime listener for incoming messages & pokes
+  // Realtime message listener
   RealtimeChannel? messageChannel;
   void setupRealtimeListener(String spaceId) {
     messageChannel?.unsubscribe();
@@ -227,72 +233,121 @@ void onStart(ServiceInstance service) async {
         .subscribe();
   }
 
+  // Listen for context updates from UI isolate
+  service.on('updateContext').listen((event) {
+    if (event != null) {
+      currentUserId = event['userId']?.toString() ?? currentUserId;
+      currentSpaceId = event['spaceId']?.toString() ?? currentSpaceId;
+      currentPartnerName = event['partnerName']?.toString() ?? currentPartnerName;
+      if (currentSpaceId.isNotEmpty) {
+        setupRealtimeListener(currentSpaceId);
+      }
+    }
+  });
+
+  service.on('stopService').listen((event) {
+    service.stopSelf();
+  });
+
   if (currentSpaceId.isNotEmpty) {
     setupRealtimeListener(currentSpaceId);
   }
 
-  // Periodic GPS Location updates & Polling every 25 seconds
-  Timer.periodic(const Duration(seconds: 25), (timer) async {
-    // Reload prefs in case updated by UI
-    final freshUserId = prefs.getString('bg_user_id') ?? currentUserId;
-    final freshSpaceId = prefs.getString('bg_space_id') ?? currentSpaceId;
-    final freshPartnerName = prefs.getString('bg_partner_name') ?? currentPartnerName;
-
-    if (freshSpaceId != currentSpaceId && freshSpaceId.isNotEmpty) {
-      currentSpaceId = freshSpaceId;
-      setupRealtimeListener(currentSpaceId);
-    }
-    currentUserId = freshUserId;
-    currentPartnerName = freshPartnerName;
-
-    // Check if user is logged in and paired
-    if (currentUserId.isEmpty || currentSpaceId.isEmpty) {
-      if (service is AndroidServiceInstance) {
-        service.setForegroundNotificationInfo(
-          title: "UsOnly Siap Digunakan",
-          content: "Silakan buka aplikasi untuk mulai berbagi lokasi",
-        );
-      }
-      return;
-    }
-
+  // Periodic GPS Location updates & Polling every 20 seconds
+  Timer.periodic(const Duration(seconds: 20), (timer) async {
     try {
-      // 1. Fetch current device GPS position
-      final position = await Geolocator.getCurrentPosition(
-        locationSettings: const LocationSettings(
-          accuracy: LocationAccuracy.high,
-          timeLimit: Duration(seconds: 8),
-        ),
-      );
+      // Reload prefs to catch changes from UI isolate
+      await prefs.reload();
+      final freshUserId = prefs.getString('bg_user_id') ?? currentUserId;
+      final freshSpaceId = prefs.getString('bg_space_id') ?? currentSpaceId;
+      final freshPartnerName = prefs.getString('bg_partner_name') ?? currentPartnerName;
 
-      // 2. Upload location directly to Supabase locations table
-      await supabase.from('locations').upsert({
-        'couple_id': currentSpaceId,
-        'user_id': currentUserId,
-        'latitude': position.latitude,
-        'longitude': position.longitude,
-        'address_label': 'Online 📍',
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      currentUserId = freshUserId;
+      currentPartnerName = freshPartnerName;
 
-      // 3. Ensure location_sharing is enabled & sync battery
-      await supabase.from('location_sharing').upsert({
-        'couple_id': currentSpaceId,
-        'user_id': currentUserId,
-        'enabled': true,
-        'updated_at': DateTime.now().toIso8601String(),
-      });
+      if (freshSpaceId != currentSpaceId && freshSpaceId.isNotEmpty) {
+        currentSpaceId = freshSpaceId;
+        setupRealtimeListener(currentSpaceId);
+      }
 
+      // Self-heal: If user id or space id is missing, read from Supabase auth session
+      if (currentUserId.isEmpty) {
+        final sessionUser = supabase.auth.currentUser;
+        if (sessionUser != null) {
+          currentUserId = sessionUser.id;
+          await prefs.setString('bg_user_id', currentUserId);
+        }
+      }
+
+      if (currentSpaceId.isEmpty && currentUserId.isNotEmpty) {
+        final profile = await supabase
+            .from('profiles')
+            .select('space_id')
+            .eq('id', currentUserId)
+            .maybeSingle();
+        final foundSpaceId = profile?['space_id']?.toString() ?? '';
+        if (foundSpaceId.isNotEmpty) {
+          currentSpaceId = foundSpaceId;
+          await prefs.setString('bg_space_id', currentSpaceId);
+          setupRealtimeListener(currentSpaceId);
+        }
+      }
+
+      // Check if user is logged in and paired
+      if (currentUserId.isEmpty || currentSpaceId.isEmpty) {
+        if (service is AndroidServiceInstance) {
+          service.setForegroundNotificationInfo(
+            title: "UsOnly Siap Digunakan",
+            content: "Silakan buka aplikasi untuk mulai berbagi lokasi",
+          );
+        }
+        return;
+      }
+
+      // 1. Fetch current device GPS position (with fallback to last known)
+      Position? position;
+      try {
+        position = await Geolocator.getCurrentPosition(
+          locationSettings: const LocationSettings(
+            accuracy: LocationAccuracy.high,
+            timeLimit: Duration(seconds: 8),
+          ),
+        );
+      } catch (_) {
+        position = await Geolocator.getLastKnownPosition();
+      }
+
+      if (position != null) {
+        // 2. Upload location directly to Supabase locations table
+        await supabase.from('locations').upsert({
+          'couple_id': currentSpaceId,
+          'user_id': currentUserId,
+          'latitude': position.latitude,
+          'longitude': position.longitude,
+          'address_label': 'Online 📍',
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+
+        // 3. Ensure location_sharing is enabled
+        await supabase.from('location_sharing').upsert({
+          'couple_id': currentSpaceId,
+          'user_id': currentUserId,
+          'enabled': true,
+          'updated_at': DateTime.now().toIso8601String(),
+        });
+      }
+
+      // 4. Sync real battery level to profile
       final batteryLevel = await BatteryService.getBatteryLevel();
       await supabase.from('profiles').update({
         'battery_level': batteryLevel,
       }).eq('id', currentUserId);
 
-      // 4. Update notification status
+      // 5. Update foreground notification content
       if (service is AndroidServiceInstance) {
         service.setForegroundNotificationInfo(
           title: "UsOnly Terhubung ❤️",
-          content: "Lokasi otomatis berbagi dengan $currentPartnerName",
+          content: "Berbagi lokasi aktif dengan $currentPartnerName",
         );
       }
     } catch (e) {

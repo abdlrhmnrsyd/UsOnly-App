@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:io';
+import 'package:flutter/foundation.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:supabase_flutter/supabase_flutter.dart';
 import '../../../core/socket_service.dart';
@@ -21,48 +22,121 @@ class ChatRepository {
       StreamController<List<MessageModel>>.broadcast();
   final List<MessageModel> _inMemoryMessages = [];
   Timer? _pollingTimer;
+  RealtimeChannel? _realtimeMessagesChannel;
 
   ChatRepository(this._socket, this._storage) {
+    // 1. Listen to broadcast messages from SocketService (instant peer-to-peer delivery)
     _socket.onMessage.listen((json) {
-      final msg = MessageModel.fromJson(json);
-      // Append to the bottom (newest message)
-      if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
-        _inMemoryMessages.add(msg);
-        _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+      try {
+        final msg = MessageModel.fromJson(json);
+        _addOrUpdateMessage(msg);
+      } catch (e) {
+        debugPrint('[ChatRepository] Error parsing broadcast message: $e');
       }
     });
   }
 
-  Stream<List<MessageModel>> watchMessages(String conversationId, {int limit = 50}) {
+  void _addOrUpdateMessage(MessageModel msg) {
+    if (msg.id.isEmpty) return;
+    final idx = _inMemoryMessages.indexWhere((m) => m.id == msg.id);
+    if (idx >= 0) {
+      _inMemoryMessages[idx] = msg;
+    } else {
+      _inMemoryMessages.add(msg);
+    }
+    _inMemoryMessages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
+    _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+  }
+
+  /// Subscribe to real-time database changes & periodic sync for a couple space
+  Stream<List<MessageModel>> watchMessages(String conversationId, {int limit = 100}) {
+    _setupRealtimeSubscription(conversationId);
     fetchMessages(spaceId: conversationId, limit: limit);
+
     _pollingTimer?.cancel();
     _pollingTimer = Timer.periodic(
       const Duration(seconds: 10),
       (_) => fetchMessages(spaceId: conversationId, limit: limit),
     );
+
     return _messagesStreamController.stream;
   }
 
-  Future<List<MessageModel>> fetchMessages({String? spaceId, int limit = 50}) async {
+  void _setupRealtimeSubscription(String spaceId) {
+    if (spaceId.isEmpty) return;
+    _realtimeMessagesChannel?.unsubscribe();
+
+    _realtimeMessagesChannel = _supabase
+        .channel('chat_realtime:$spaceId')
+        .onPostgresChanges(
+          event: PostgresChangeEvent.all,
+          schema: 'public',
+          table: 'messages',
+          filter: PostgresChangeFilter(
+            type: PostgresChangeFilterType.eq,
+            column: 'couple_id',
+            value: spaceId,
+          ),
+          callback: (payload) {
+            final record = payload.newRecord;
+            if (record.isNotEmpty) {
+              try {
+                final msg = MessageModel.fromJson(Map<String, dynamic>.from(record));
+                _addOrUpdateMessage(msg);
+              } catch (e) {
+                debugPrint('[ChatRepository] Error parsing realtime Postgres message: $e');
+              }
+            }
+          },
+        )
+        .subscribe();
+  }
+
+  /// Fetch the newest messages from Supabase (ordered chronologically)
+  Future<List<MessageModel>> fetchMessages({String? spaceId, int limit = 100}) async {
     try {
       final user = _supabase.auth.currentUser;
       if (user == null) return _inMemoryMessages;
 
-      var query = _supabase.from('messages').select('*');
-      if (spaceId != null && spaceId.isNotEmpty) {
-        query = query.eq('couple_id', spaceId);
+      var targetSpaceId = spaceId;
+      if (targetSpaceId == null || targetSpaceId.isEmpty) {
+        final profile = await _supabase
+            .from('profiles')
+            .select('space_id')
+            .eq('id', user.id)
+            .maybeSingle();
+        targetSpaceId = profile?['space_id']?.toString();
       }
-      // Order chronologically (ascending: true) so oldest is at top, newest at bottom!
-      final res = await query.order('created_at', ascending: true).limit(limit);
 
-      final list = res
+      var query = _supabase.from('messages').select('*');
+      if (targetSpaceId != null && targetSpaceId.isNotEmpty) {
+        query = query.eq('couple_id', targetSpaceId);
+      }
+
+      // CRITICAL: Fetch the latest `limit` messages (descending), then reverse so oldest is at top
+      final res = await query.order('created_at', ascending: false).limit(limit);
+
+      final fetchedList = res
           .map((item) => MessageModel.fromJson(Map<String, dynamic>.from(item)))
+          .toList()
+          .reversed
           .toList();
-      _inMemoryMessages.clear();
-      _inMemoryMessages.addAll(list);
+
+      for (final msg in fetchedList) {
+        final idx = _inMemoryMessages.indexWhere((m) => m.id == msg.id);
+        if (idx >= 0) {
+          _inMemoryMessages[idx] = msg;
+        } else {
+          _inMemoryMessages.add(msg);
+        }
+      }
+
+      _inMemoryMessages.sort((a, b) => a.createdAt.compareTo(b.createdAt));
       _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
-      return list;
-    } catch (_) {}
+      return _inMemoryMessages;
+    } catch (e) {
+      debugPrint('[ChatRepository] Error fetching messages: $e');
+    }
     return _inMemoryMessages;
   }
 
@@ -101,10 +175,7 @@ class ChatRepository {
 
     final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
-      _inMemoryMessages.add(msg);
-    }
-    _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+    _addOrUpdateMessage(msg);
     return msg;
   }
 
@@ -136,10 +207,7 @@ class ChatRepository {
 
     final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
-      _inMemoryMessages.add(msg);
-    }
-    _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+    _addOrUpdateMessage(msg);
     return msg;
   }
 
@@ -218,6 +286,9 @@ class ChatRepository {
       'sender_id': uid,
       'message_type': 'location',
       'content': '📍 $placeLabel',
+      'latitude': latitude,
+      'longitude': longitude,
+      'place_label': placeLabel,
       'created_at': DateTime.now().toIso8601String(),
     };
 
@@ -229,10 +300,7 @@ class ChatRepository {
 
     final msg = MessageModel.fromJson(Map<String, dynamic>.from(inserted));
     _socket.emitNewMessage(msg.toJson());
-    if (!_inMemoryMessages.any((m) => m.id == msg.id)) {
-      _inMemoryMessages.add(msg);
-    }
-    _messagesStreamController.add(List.unmodifiable(_inMemoryMessages));
+    _addOrUpdateMessage(msg);
     return msg;
   }
 
@@ -280,5 +348,10 @@ class ChatRepository {
         .neq('sender_id', user.id)
         .eq('is_read', false)
         .catchError((_) {});
+  }
+
+  void dispose() {
+    _pollingTimer?.cancel();
+    _realtimeMessagesChannel?.unsubscribe();
   }
 }

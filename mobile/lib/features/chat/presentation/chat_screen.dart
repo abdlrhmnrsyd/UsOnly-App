@@ -49,16 +49,32 @@ class _ChatScreenState extends ConsumerState<ChatScreen> {
   }
 
   void _listenToIncomingMessages() {
-    _incomingSub = ref.read(chatRepositoryProvider).watchIncomingMessages().listen((msg) {
-      if (mounted) {
-        setState(() {
-          if (!_messages.any((m) => m.id == msg.id)) {
-            _messages.add(msg);
-          }
-        });
-        _scrollToBottom();
-      }
-    });
+    final user = ref.read(authStateProvider).user;
+    final spaceId = user?.coupleId;
+
+    if (spaceId != null && spaceId.isNotEmpty) {
+      _incomingSub = ref.read(chatRepositoryProvider).watchMessages(spaceId).listen((msgs) {
+        if (mounted) {
+          setState(() {
+            _messages.clear();
+            _messages.addAll(msgs);
+            _isLoading = false;
+          });
+          _scrollToBottom();
+        }
+      });
+    } else {
+      _incomingSub = ref.read(chatRepositoryProvider).watchIncomingMessages().listen((msg) {
+        if (mounted) {
+          setState(() {
+            if (!_messages.any((m) => m.id == msg.id)) {
+              _messages.add(msg);
+            }
+          });
+          _scrollToBottom();
+        }
+      });
+    }
   }
 
   void _scrollToBottom() {
